@@ -5,9 +5,6 @@
 
 """
 爬蟲目標：https://aulib.asia.edu.tw/webpac/search.cfm
-功能：逐一點擊 #hot_keyword 下的熱門關鍵字，並取得搜尋結果中的
-      第 1、5、10 筆書名。三筆皆成功取得才算通過。
-
 需求套件：pip install selenium webdriver-manager
 """
 
