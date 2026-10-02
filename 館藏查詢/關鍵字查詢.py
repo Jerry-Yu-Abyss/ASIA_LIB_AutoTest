@@ -1,13 +1,12 @@
 """
 爬蟲目標：https://aulib.asia.edu.tw/webpac/search.cfm
-功能：測試 #hot_keyword 下所有 <li> > <a> 的 href 是否可正常連結
+功能：逐一點擊 #hot_keyword 下的熱門關鍵字，並取得搜尋結果中的
+      第 1、5、10 筆書名。三筆皆成功取得才算通過。
 
 需求套件：pip install selenium webdriver-manager
 """
 
 import time
-import urllib.request
-import urllib.error
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -17,7 +16,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 TARGET_URL = "https://aulib.asia.edu.tw/webpac/search.cfm"
-BASE_URL   = "https://aulib.asia.edu.tw"
+RESULT_TITLE_SELECTOR = "#list .list_box .title ul li:last-child a"
+REQUIRED_POSITIONS = (1, 5, 10)
 
 
 def open_page(headless: bool = False) -> webdriver.Chrome:
@@ -55,94 +55,135 @@ def is_service_unavailable(driver: webdriver.Chrome) -> bool:
     return "Service Unavailable" in driver.page_source
 
 
-def check_hot_keywords(driver: webdriver.Chrome):
+def check_hot_keywords(driver: webdriver.Chrome) -> bool:
     """
-    測試結構：
-        #hot_keyword
-          └─ <li>        (多筆)
-               └─ <a href="...">
-
-    對每個 href 發送 HTTP HEAD 請求，驗證連結是否有效。
-    最後輸出報告：應該有 / 成功 / 失敗 / 失敗清單
+    逐一點擊熱門關鍵字，確認頁面成功跳轉，並從搜尋結果中取得
+    第 1、5、10 筆書名。所有關鍵字都成功才回傳 True。
     """
     print("\n" + "=" * 55)
-    print("  🔍  hot_keyword 連結測試")
+    print("  熱門關鍵字搜尋結果測試")
     print("=" * 55)
 
     try:
-        # 等待 #hot_keyword 出現
         WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "hot_keyword"))
+            lambda d: len(d.find_elements(By.CSS_SELECTOR, "#hot_keyword li > a")) > 0
         )
-        hot_keyword = driver.find_element(By.ID, "hot_keyword")
-        print(f"[+] 找到 #hot_keyword")
+        keyword_names = [
+            anchor.text.strip() or anchor.get_attribute("title") or "（無文字）"
+            for anchor in driver.find_elements(By.CSS_SELECTOR, "#hot_keyword li > a")
+        ]
+        total = len(keyword_names)
+        print(f"[+] 共找到 {total} 個熱門關鍵字")
 
-        # 取得所有 li > a
-        anchors = hot_keyword.find_elements(By.CSS_SELECTOR, "li > a")
-        total   = len(anchors)
-        print(f"[+] 共找到 {total} 個 <li> > <a>\n")
+        report = []
 
-        success_count = 0
-        fail_list     = []   # (關鍵字文字, href, 失敗原因)
+        for idx, keyword in enumerate(keyword_names, start=1):
+            print(f"\n[{idx:02d}/{total:02d}] 測試關鍵字：{keyword}")
+            result = {
+                "keyword": keyword,
+                "success": False,
+                "url": "",
+                "books": {},
+                "reason": "",
+            }
 
-        for idx, anchor in enumerate(anchors, start=1):
-            text = anchor.text.strip() or "（無文字）"
-            href = anchor.get_attribute("href") or ""
-
-            if not href:
-                print(f"  [{idx:02d}] {text:<20} ⚠  無 href")
-                fail_list.append((text, "（無 href）", "缺少 href"))
-                continue
-
-            # 補全相對路徑
-            full_url = href if href.startswith("http") else BASE_URL + href
-
-            # HEAD 請求驗證
             try:
-                req = urllib.request.Request(
-                    full_url,
-                    method="HEAD",
-                    headers={"User-Agent": "Mozilla/5.0"}
+                # 每次回到首頁重新取得元素，避免上一頁的 WebElement 失效。
+                driver.get(TARGET_URL)
+                WebDriverWait(driver, 15).until(
+                    lambda d: len(
+                        d.find_elements(By.CSS_SELECTOR, "#hot_keyword li > a")
+                    ) >= idx
                 )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    status = resp.status
-                    if status == 200:
-                        print(f"  [{idx:02d}] {text:<20} ✅ {status}  {full_url}")
-                        success_count += 1
-                    else:
-                        print(f"  [{idx:02d}] {text:<20} ❌ {status}  {full_url}")
-                        fail_list.append((text, full_url, f"HTTP {status}"))
+                anchor = driver.find_elements(
+                    By.CSS_SELECTOR, "#hot_keyword li > a"
+                )[idx - 1]
+                before_url = driver.current_url
 
-            except urllib.error.HTTPError as e:
-                print(f"  [{idx:02d}] {text:<20} ❌ HTTP {e.code}  {full_url}")
-                fail_list.append((text, full_url, f"HTTP {e.code}"))
-            except urllib.error.URLError as e:
-                print(f"  [{idx:02d}] {text:<20} ❌ 連線失敗  {full_url}")
-                fail_list.append((text, full_url, f"連線失敗：{e.reason}"))
+                # 實際點擊關鍵字，不只對 href 發送請求。
+                anchor.click()
+                WebDriverWait(driver, 20).until(
+                    lambda d: d.current_url != before_url
+                )
+                result["url"] = driver.current_url
+                print(f"  [+] 已跳轉：{result['url']}")
+
+                if is_service_unavailable(driver):
+                    raise RuntimeError("搜尋結果頁回傳 Service Unavailable")
+
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.ID, "list"))
+                )
+                title_anchors = driver.find_elements(
+                    By.CSS_SELECTOR, RESULT_TITLE_SELECTOR
+                )
+                print(f"  [+] 搜尋結果共載入 {len(title_anchors)} 筆")
+
+                missing = []
+                for position in REQUIRED_POSITIONS:
+                    if len(title_anchors) < position:
+                        missing.append(f"第 {position} 筆不存在")
+                        continue
+
+                    title_anchor = title_anchors[position - 1]
+                    book_name = (
+                        title_anchor.get_attribute("title")
+                        or title_anchor.text
+                        or ""
+                    ).strip()
+                    if not book_name:
+                        missing.append(f"第 {position} 筆書名為空")
+                        continue
+
+                    result["books"][position] = book_name
+                    print(f"      第 {position:>2} 筆：{book_name}")
+
+                if missing:
+                    result["reason"] = "；".join(missing)
+                    print(f"  [FAIL] 失敗：{result['reason']}")
+                else:
+                    result["success"] = True
+                    print("  [PASS] 點擊成功，且已取得第 1、5、10 筆書名")
+
             except Exception as e:
-                print(f"  [{idx:02d}] {text:<20} ❌ 例外錯誤  {full_url}")
-                fail_list.append((text, full_url, str(e)))
+                result["url"] = driver.current_url
+                result["reason"] = str(e) or type(e).__name__
+                print(f"  [FAIL] 失敗：{result['reason']}")
 
-        # ── 最終報告 ──
-        fail_count = len(fail_list)
+            report.append(result)
+
+        success_count = sum(1 for item in report if item["success"])
+        fail_count = total - success_count
+
         print("\n" + "█" * 55)
-        print("  📋  hot_keyword 連結測試報告")
+        print("  熱門關鍵字簡易測試報告")
         print("█" * 55)
-        print(f"  應該有：{total} 筆")
-        print(f"  成功：  {success_count} 筆")
-        print(f"  失敗：  {fail_count} 筆")
-        if fail_list:
-            print(f"\n  失敗的連結：")
-            for name, url, reason in fail_list:
-                print(f"    • {name}")
-                print(f"      原因：{reason}")
-                print(f"      網址：{url}")
+        print(f"  關鍵字總數：{total}")
+        print(f"  成功：      {success_count}")
+        print(f"  失敗：      {fail_count}")
+
+        for item in report:
+            status = "成功" if item["success"] else "失敗"
+            print(f"\n  [{status}] {item['keyword']}")
+            for position in REQUIRED_POSITIONS:
+                name = item["books"].get(position, "（未取得）")
+                print(f"         第 {position:>2} 筆：{name}")
+            if item["reason"]:
+                print(f"         原因：{item['reason']}")
+            if item["url"]:
+                print(f"         網址：{item['url']}")
+
+        print("\n" + "─" * 55)
+        if fail_count == 0:
+            print("  [PASS] 全部關鍵字連結成功，且皆取得第 1、5、10 筆書名")
         else:
-            print(f"\n  ✅ 所有連結均可正常存取")
+            print(f"  [FAIL] 測試未完全通過，共 {fail_count} 個關鍵字失敗")
         print("█" * 55)
+        return fail_count == 0
 
     except Exception as e:
         print(f"[!] check_hot_keywords 發生錯誤：{e}")
+        return False
 
 
 def main(max_retries: int = 10, retry_interval: int = 30):
