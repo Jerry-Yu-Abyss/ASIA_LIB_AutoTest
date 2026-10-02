@@ -1,0 +1,1 @@
+接下來是新的測試 建立新的.py 目標網站一樣 測試在 id="ss_keyword" 中的input 輸入文字(詢問接受空格分段讀取例如: 輸入)測試 當輸入後檢查有無成功跳轉畫面 再來檢查id="list" 下 class="list_box" 下 class="title" 下 <ul> 下 有三個<li>中的最後一個 下<a> 中的 title 是否有包含id="ss_keyword" 中的input 輸入文字 
