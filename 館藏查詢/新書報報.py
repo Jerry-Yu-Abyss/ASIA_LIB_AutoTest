@@ -1,3 +1,8 @@
+# 測試成功標準：
+# 1. 網站可正常開啟，且能找到 #newBooks > .slideMain 的新書區塊。
+# 2. 新書區塊中的每一本書都必須有有效的封面圖片。
+# 3. 不可缺少圖片或使用預設佔位圖；最終報告的缺少數量為 0 才算成功。
+
 """
 爬蟲目標：https://aulib.asia.edu.tw/webpac/search.cfm
 需求套件：pip install selenium webdriver-manager
