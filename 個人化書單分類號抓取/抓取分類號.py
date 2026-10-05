@@ -1,7 +1,7 @@
 """亞洲大學圖書館個人書單分類號擷取工具。
 
-預設開啟 Chrome，由使用者登入後自動收集個人化書單。也可以用
---input 處理網站匯出的 Excel。
+預設以視窗選擇要填的 Excel，接著開啟 Chrome，由使用者登入後抓取。
+--live 可直接處理目前的個人化書單，--input 可在不登入時處理指定檔案。
 """
 
 from __future__ import annotations
@@ -126,6 +126,26 @@ def read_input(path: Path) -> list[Book]:
     raise ValueError("只支援 .xlsx 或網站匯出的 HTML 格式 .xls。")
 
 
+def choose_input_gui() -> Path | None:
+    """以 Windows 選檔視窗詢問要填入的 Excel；取消時不開始抓取。"""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    window = tk.Tk()
+    window.withdraw()
+    window.attributes("-topmost", True)
+    try:
+        selected = filedialog.askopenfilename(
+            parent=window,
+            title="選擇要填入分類號的 XLS / XLSX",
+            initialdir=str(INPUT_DIR),
+            filetypes=[("Excel 檔案", "*.xls *.xlsx"), ("所有檔案", "*.*")],
+        )
+    finally:
+        window.destroy()
+    return Path(selected) if selected else None
+
+
 def extract_holdings(page: bytes) -> tuple[list[str], str]:
     doc = html.fromstring(page)
     found: list[str] = []
@@ -162,8 +182,13 @@ def extract_holdings(page: bytes) -> tuple[list[str], str]:
     return found, f"{available},{len(holdings)}" if holdings else ""
 
 
-def collect_live_books() -> tuple[list[Book], requests.Session]:
+def book_mid(url: str) -> str:
+    return parse_qs(urlparse(url).query).get("mid", [""])[0]
+
+
+def collect_live_books() -> tuple[list[Book], dict[str, tuple[list[str], str]]]:
     from selenium import webdriver
+    from selenium.common.exceptions import NoSuchElementException, NoSuchWindowException, UnexpectedAlertPresentException
     from selenium.webdriver.common.by import By
     from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.support.ui import WebDriverWait
@@ -181,14 +206,33 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
             )
             trigger.click()
             print("登入視窗已開啟，請在 Chrome 中自行完成登入；程式會自動繼續。", flush=True)
-            WebDriverWait(driver, 600, poll_frequency=1).until(
-                lambda d: (
-                    "登出" in d.find_element(By.ID, "login").text
-                    or (
-                        urlparse(d.current_url).path.endswith("/shelf_personalbook_list.cfm")
-                        and bool(d.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li"))
+
+            def login_complete(browser: webdriver.Chrome) -> bool:
+                try:
+                    login_area = browser.find_element(By.ID, "login")
+                    return (
+                        "登出" in login_area.text
+                        or (
+                            urlparse(browser.current_url).path.endswith("/shelf_personalbook_list.cfm")
+                            and bool(browser.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li"))
+                        )
                     )
-                )
+                except NoSuchElementException:
+                    return False
+                except UnexpectedAlertPresentException:
+                    alert = browser.switch_to.alert
+                    print(f"網站提示：{alert.text}", flush=True)
+                    alert.accept()
+                    return False
+                except NoSuchWindowException:
+                    handles = browser.window_handles
+                    if not handles:
+                        raise RuntimeError("登入視窗已關閉，請重新執行程式。")
+                    browser.switch_to.window(handles[0])
+                    return False
+
+            WebDriverWait(driver, 600, poll_frequency=1).until(
+                login_complete
             )
         print("已登入，正在開啟『我的書房 → 個人化書單』。", flush=True)
         driver.get(SHELF_URL)
@@ -203,6 +247,7 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
         expected_total = int(total_match.group(1)) if total_match else None
 
         books: list[Book] = []
+        clicked: dict[str, tuple[list[str], str]] = {}
         seen: set[str] = set()
         visited_pages: set[tuple[str, ...]] = set()
         for _ in range(100):
@@ -215,6 +260,7 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
             if signature in visited_pages:
                 break
             visited_pages.add(signature)
+            page_books: list[Book] = []
             for li in item_rows:
                 boxes = li.find_elements(By.CSS_SELECTOR, "input[id^='cart_kit_checkbox_']")
                 anchors = li.find_elements(By.CSS_SELECTOR, "a[onclick^='content(']")
@@ -227,13 +273,37 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
                 url = urljoin(SHELF_URL, match.group(1))
                 if not valid_book_url(url) or url in seen:
                     continue
-                if parse_qs(urlparse(url).query).get("mid", [""])[0] != mid:
+                if book_mid(url) != mid:
                     raise RuntimeError(f"書目連結與列表 ID 不一致：{mid}")
                 seen.add(url)
                 title = clean_text(anchors[0].text)
                 cells = li.find_elements(By.XPATH, "./div")
                 availability = clean_text(cells[-1].text) if cells else ""
-                books.append(Book(title, availability, url))
+                book = Book(title, availability, url)
+                books.append(book)
+                page_books.append(book)
+            for book in page_books:
+                mid = book_mid(book.url)
+                anchor = driver.find_element(
+                    By.XPATH,
+                    f"//ul[contains(concat(' ', normalize-space(@class), ' '), ' reference-list-content ')]"
+                    f"/li[.//input[@id='cart_kit_checkbox_{mid}']]//a[starts-with(@onclick, 'content(')]",
+                )
+                anchor.click()
+                WebDriverWait(driver, 20).until(
+                    lambda d: urlparse(d.current_url).path.endswith("/ele_content.cfm")
+                    and book_mid(d.current_url) == mid
+                )
+                WebDriverWait(driver, 20).until(
+                    lambda d: "索書號(卷期)" in d.page_source
+                )
+                clicked[mid] = extract_holdings(driver.page_source.encode("utf-8"))
+                print(f"已點開 [{len(clicked)}] {book.description[:30]}", flush=True)
+                driver.back()
+                WebDriverWait(driver, 20).until(
+                    lambda d: urlparse(d.current_url).path.endswith("/shelf_personalbook_list.cfm")
+                    and bool(d.find_elements(By.ID, f"cart_kit_checkbox_{mid}"))
+                )
             if expected_total is not None and len(books) >= expected_total:
                 break
             next_links = driver.find_elements(By.CSS_SELECTOR, "a[title='下一頁'][onclick]")
@@ -256,10 +326,7 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
             raise RuntimeError("登入後的個人化書單沒有找到書目。")
         if expected_total is not None and len(books) != expected_total:
             raise RuntimeError(f"個人化書單顯示 {expected_total} 筆，但只擷取 {len(books)} 筆。")
-        session = requests.Session()
-        for cookie in driver.get_cookies():
-            session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain", "aulib.asia.edu.tw"), path=cookie.get("path", "/"))
-        return books, session
+        return books, clicked
     finally:
         driver.quit()
 
@@ -294,6 +361,24 @@ def fetch_results(books: list[Book], session: requests.Session, delay: float) ->
         print(f"[{position}/{len(books)}] {number or '未取得'}  {book.description[:30]}")
         if delay and position < len(books):
             time.sleep(delay)
+    return rows, issues
+
+
+def clicked_results(books: list[Book], clicked: dict[str, tuple[list[str], str]]) -> tuple[list[list[str]], list[list[str]]]:
+    missing = [book for book in books if book_mid(book.url) not in clicked]
+    if missing:
+        raise ValueError(
+            f"所選檔案有 {len(missing)} 筆不在目前的個人化書單中；請選擇與網站書單相同的匯出檔。"
+        )
+    rows: list[list[str]] = []
+    issues: list[list[str]] = []
+    for position, book in enumerate(books, 1):
+        found, current_availability = clicked[book_mid(book.url)]
+        number = "、".join(found)
+        reason = "未找到索書號(卷期)" if not found else (f"多個不同分類號：{number}" if len(found) > 1 else "")
+        rows.append([book.description, book.availability or current_availability, number, book.url])
+        if reason:
+            issues.append([str(position), book.description, book.url, reason])
     return rows, issues
 
 
@@ -335,26 +420,38 @@ def save_results(output: Path, rows: list[list[str]], issues: list[list[str]]) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, help="改用網站匯出的 .xls/.xlsx 檔案；預設會開 Chrome 讓使用者登入")
+    parser.add_argument("--input", type=Path, help="無登入批次模式：處理指定的 .xls/.xlsx 檔案")
     parser.add_argument("--output", type=Path, help="指定完成檔路徑；可用來更新既有結果")
-    parser.add_argument("--live", action="store_true", help="開啟 Chrome，由使用者登入後直接讀取個人書單")
+    parser.add_argument("--live", action="store_true", help="略過選檔視窗，登入後直接處理目前的個人化書單")
     parser.add_argument("--delay", type=float, default=0.5, help="書目頁請求間隔（秒）")
     args = parser.parse_args()
     if args.live and args.input:
         parser.error("--live 與 --input 不可同時使用")
     INPUT_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
-    if args.live or args.input is None:
-        books, session = collect_live_books()
+    if args.live:
+        books, clicked = collect_live_books()
         today = date.today()
         label = f"個人書單{today.year - 1911:03d}{today.month:02d}{today.day:02d}"
-    else:
+    elif args.input is not None:
         books = read_input(args.input)
         session = requests.Session()
         label = args.input.stem
+    else:
+        selected = choose_input_gui()
+        if selected is None:
+            print("未選擇檔案，已取消。")
+            return 0
+        books = read_input(selected)
+        print(f"已選擇：{selected}（{len(books)} 筆）", flush=True)
+        _, clicked = collect_live_books()
+        label = selected.stem
     if not books:
         raise RuntimeError("來源中沒有書目。")
-    rows, issues = fetch_results(books, session, max(args.delay, 0))
+    if args.input is not None:
+        rows, issues = fetch_results(books, session, max(args.delay, 0))
+    else:
+        rows, issues = clicked_results(books, clicked)
     output = args.output or OUTPUT_DIR / f"{label}_已填分類號.xlsx"
     output.parent.mkdir(parents=True, exist_ok=True)
     save_results(output, rows, issues)
