@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 from unicodedata import east_asian_width
 
 import requests
@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent
 INPUT_DIR = ROOT / "待處理"
 OUTPUT_DIR = ROOT / "完成"
 HEADERS = ("書目資訊", "在架/館藏量", "分類號", "URL")
-CALL_NUMBER_PREFIX = re.compile(r"^\s*([A-Za-z]{0,3}\d+(?:\.\d+)?[A-Za-z0-9]*)")
+CALL_NUMBER_PREFIX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{0,3}\d+(?:\.\d+)?[A-Za-z0-9]*)")
 
 
 @dataclass(frozen=True)
@@ -125,9 +125,11 @@ def read_input(path: Path) -> list[Book]:
     raise ValueError("只支援 .xlsx 或網站匯出的 HTML 格式 .xls。")
 
 
-def extract_class_numbers(page: bytes) -> list[str]:
+def extract_holdings(page: bytes) -> tuple[list[str], str]:
     doc = html.fromstring(page)
     found: list[str] = []
+    holdings: set[str] = set()
+    available = 0
     for table in doc.xpath("//table"):
         head_rows = table.xpath("./thead/tr")
         if not head_rows:
@@ -136,15 +138,27 @@ def extract_class_numbers(page: bytes) -> list[str]:
         if "索書號(卷期)" not in labels:
             continue
         number_col = labels.index("索書號(卷期)")
-        for row in table.xpath("./tbody/tr"):
+        accession_col = labels.index("登錄號") if "登錄號" in labels else None
+        status_col = labels.index("館藏狀態") if "館藏狀態" in labels else None
+        for row_index, row in enumerate(table.xpath("./tbody/tr")):
             cells = row.xpath("./th|./td")
             if number_col >= len(cells):
                 continue
             raw = clean_text(cells[number_col].text_content())
-            match = CALL_NUMBER_PREFIX.match(raw)
+            if not raw:
+                continue
+            match = CALL_NUMBER_PREFIX.search(raw)
             if match and match.group(1) not in found:
                 found.append(match.group(1))
-    return found
+            accession = clean_text(cells[accession_col].text_content()) if accession_col is not None and accession_col < len(cells) else ""
+            key = accession or f"{id(table)}:{row_index}"
+            if key in holdings:
+                continue
+            holdings.add(key)
+            status = clean_text(cells[status_col].text_content()) if status_col is not None and status_col < len(cells) else ""
+            if status.startswith("在架"):
+                available += 1
+    return found, f"{available},{len(holdings)}" if holdings else ""
 
 
 def collect_live_books() -> tuple[list[Book], requests.Session]:
@@ -157,58 +171,73 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
     try:
         driver.get(SHELF_URL)
-        print("Chrome 已開啟。請自行登入並進入『個人化書單』，確認書目可見。")
+        print("Chrome 已開啟。請自行登入圖書館網站。")
         input("完成後回到此視窗按 Enter：")
-        if "登入時間已過" in driver.page_source or "login" in driver.current_url.lower():
-            raise RuntimeError("目前仍在登入頁，請先完成登入。")
+        driver.get(SHELF_URL)
+        WebDriverWait(driver, 20).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li")
+            or "登入時間已過" in d.page_source
+        )
+        if not urlparse(driver.current_url).path.endswith("/shelf_personalbook_list.cfm"):
+            raise RuntimeError("未進入『我的書房 → 個人化書單』。請確認已在此 Chrome 視窗登入。")
+        summary = clean_text(driver.find_element(By.TAG_NAME, "body").text)
+        total_match = re.search(r"第\s*\d+\s*-\s*\d+\s*筆[，,]\s*共\s*(\d+)\s*筆", summary)
+        expected_total = int(total_match.group(1)) if total_match else None
 
         books: list[Book] = []
         seen: set[str] = set()
-        visited_pages: set[tuple[str, tuple[str, ...]]] = set()
+        visited_pages: set[tuple[str, ...]] = set()
         for _ in range(100):
-            page_links = [
-                urljoin(driver.current_url, a.get_attribute("href") or "")
-                for a in driver.find_elements(By.CSS_SELECTOR, "a[href]")
-            ]
-            signature = (driver.current_url, tuple(u for u in page_links if valid_book_url(u)))
+            item_rows = driver.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li")
+            signature = tuple(
+                box.get_attribute("id")
+                for li in item_rows
+                for box in li.find_elements(By.CSS_SELECTOR, "input[id^='cart_kit_checkbox_']")
+            )
             if signature in visited_pages:
                 break
             visited_pages.add(signature)
-            for anchor in driver.find_elements(By.CSS_SELECTOR, "a[href]"):
-                url = urljoin(driver.current_url, anchor.get_attribute("href") or "")
+            for li in item_rows:
+                boxes = li.find_elements(By.CSS_SELECTOR, "input[id^='cart_kit_checkbox_']")
+                anchors = li.find_elements(By.CSS_SELECTOR, "a[onclick^='content(']")
+                if not boxes or not anchors:
+                    continue
+                mid = boxes[0].get_attribute("id").removeprefix("cart_kit_checkbox_")
+                match = re.search(r"content\('([^']+)'", anchors[0].get_attribute("onclick") or "")
+                if not match:
+                    continue
+                url = urljoin(SHELF_URL, match.group(1))
                 if not valid_book_url(url) or url in seen:
                     continue
+                if parse_qs(urlparse(url).query).get("mid", [""])[0] != mid:
+                    raise RuntimeError(f"書目連結與列表 ID 不一致：{mid}")
                 seen.add(url)
-                title = clean_text(anchor.text or anchor.get_attribute("title") or "")
-                parent_text = clean_text(anchor.find_element(By.XPATH, "..").text)
-                availability = re.search(r"\b\d+\s*,\s*\d+\b", parent_text)
-                books.append(Book(title or parent_text, availability.group().replace(" ", "") if availability else "", url))
-            next_links = driver.find_elements(
-                By.XPATH,
-                "//a[contains(normalize-space(.),'下一頁') or contains(normalize-space(.),'下頁') or @rel='next']",
-            )
+                title = clean_text(anchors[0].text)
+                cells = li.find_elements(By.XPATH, "./div")
+                availability = clean_text(cells[-1].text) if cells else ""
+                books.append(Book(title, availability, url))
+            if expected_total is not None and len(books) >= expected_total:
+                break
+            next_links = driver.find_elements(By.CSS_SELECTOR, "a[title='下一頁'][onclick]")
             next_link = next((a for a in next_links if a.is_displayed() and a.is_enabled()), None)
             if next_link is None:
                 break
             next_link.click()
             try:
                 WebDriverWait(driver, 15).until(
-                    lambda d: (
-                        d.current_url,
-                        tuple(
-                            u for u in (
-                                urljoin(d.current_url, a.get_attribute("href") or "")
-                                for a in d.find_elements(By.CSS_SELECTOR, "a[href]")
-                            )
-                            if valid_book_url(u)
-                        ),
+                    lambda d: tuple(
+                        box.get_attribute("id")
+                        for li in d.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li")
+                        for box in li.find_elements(By.CSS_SELECTOR, "input[id^='cart_kit_checkbox_']")
                     ) != signature
                 )
             except Exception:
                 break
 
         if not books:
-            raise RuntimeError("登入後的頁面沒有找到書目連結。請改用網站匯出的 Excel 放在『待處理』資料夾。")
+            raise RuntimeError("登入後的個人化書單沒有找到書目。")
+        if expected_total is not None and len(books) != expected_total:
+            raise RuntimeError(f"個人化書單顯示 {expected_total} 筆，但只擷取 {len(books)} 筆。")
         session = requests.Session()
         for cookie in driver.get_cookies():
             session.cookies.set(cookie["name"], cookie["value"], domain=cookie.get("domain", "aulib.asia.edu.tw"), path=cookie.get("path", "/"))
@@ -222,11 +251,17 @@ def fetch_results(books: list[Book], session: requests.Session, delay: float) ->
     issues: list[list[str]] = []
     for position, book in enumerate(books, 1):
         number = ""
+        availability = book.availability
         reason = ""
         try:
             response = session.get(book.url, timeout=30)
+            if response.status_code >= 400:
+                mid = parse_qs(urlparse(book.url).query).get("mid", [""])[0]
+                if mid.isdigit():
+                    response = session.get(urljoin(BASE_URL, f"ele_content.cfm?mid={mid}"), timeout=30)
             response.raise_for_status()
-            found = extract_class_numbers(response.content)
+            found, current_availability = extract_holdings(response.content)
+            availability = availability or current_availability
             if not found:
                 reason = "未找到索書號(卷期)"
             else:
@@ -235,7 +270,7 @@ def fetch_results(books: list[Book], session: requests.Session, delay: float) ->
                     reason = f"多個不同分類號：{number}"
         except requests.RequestException as exc:
             reason = f"連線失敗：{exc}"
-        rows.append([book.description, book.availability, number, book.url])
+        rows.append([book.description, availability, number, book.url])
         if reason:
             issues.append([str(position), book.description, book.url, reason])
         print(f"[{position}/{len(books)}] {number or '未取得'}  {book.description[:30]}")
@@ -267,17 +302,23 @@ def save_results(output: Path, rows: list[list[str]], issues: list[list[str]]) -
         visual_length = sum(2 if east_asian_width(char) in "WF" else 1 for char in str(row[0].value or ""))
         sheet.row_dimensions[row_number].height = max(29, math.ceil(visual_length / 74) * 18)
         row[2].number_format = "@"  # 分類號是識別碼，保留字母和前導零。
-    wb.save(output)
+    temporary = output.with_name(output.stem + ".partial.xlsx")
+    wb.save(temporary)
+    temporary.replace(output)
+    issues_path = output.with_name(output.stem + "_待核對.csv")
     if issues:
-        with output.with_name(output.stem + "_待核對.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        with issues_path.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.writer(handle)
             writer.writerow(("序號", "書目資訊", "URL", "原因"))
             writer.writerows(issues)
+    else:
+        issues_path.unlink(missing_ok=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, help="網站匯出的 .xls/.xlsx 路徑；省略時使用『待處理』中最新的檔案")
+    parser.add_argument("--output", type=Path, help="指定完成檔路徑；可用來更新既有結果")
     parser.add_argument("--live", action="store_true", help="開啟 Chrome，由使用者登入後直接讀取個人書單")
     parser.add_argument("--delay", type=float, default=0.5, help="書目頁請求間隔（秒）")
     args = parser.parse_args()
@@ -300,7 +341,8 @@ def main() -> int:
     if not books:
         raise RuntimeError("來源中沒有書目。")
     rows, issues = fetch_results(books, session, max(args.delay, 0))
-    output = OUTPUT_DIR / f"{label}_已填分類號.xlsx"
+    output = args.output or OUTPUT_DIR / f"{label}_已填分類號.xlsx"
+    output.parent.mkdir(parents=True, exist_ok=True)
     save_results(output, rows, issues)
     print(f"完成：{len(rows)} 筆，待核對 {len(issues)} 筆。\n{output}")
     return 0 if not issues else 2
