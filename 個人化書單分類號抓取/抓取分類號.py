@@ -1,7 +1,7 @@
 """亞洲大學圖書館個人書單分類號擷取工具。
 
-使用者可以把網站匯出的 Excel 放進「待處理」資料夾後執行；也可以用
---live 開啟 Chrome，自行登入後讓程式收集目前書單的書目連結。
+預設開啟 Chrome，由使用者登入後自動收集個人化書單。也可以用
+--input 處理網站匯出的 Excel。
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 
 BASE_URL = "https://aulib.asia.edu.tw/webpac/"
 SHELF_URL = urljoin(BASE_URL, "shelf_personalbook_list.cfm")
+LOGIN_URL = urljoin(BASE_URL, "search.cfm")
 ROOT = Path(__file__).resolve().parent
 INPUT_DIR = ROOT / "待處理"
 OUTPUT_DIR = ROOT / "完成"
@@ -170,9 +171,26 @@ def collect_live_books() -> tuple[list[Book], requests.Session]:
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
     try:
-        driver.get(SHELF_URL)
-        print("Chrome 已開啟。請自行登入圖書館網站。")
-        input("完成後回到此視窗按 Enter：")
+        driver.get(LOGIN_URL)
+        login = WebDriverWait(driver, 20).until(
+            lambda d: d.find_element(By.ID, "login")
+        )
+        if "登出" not in login.text:
+            trigger = WebDriverWait(driver, 20).until(
+                lambda d: d.find_element(By.ID, "login_window_kit_trigger")
+            )
+            trigger.click()
+            print("登入視窗已開啟，請在 Chrome 中自行完成登入；程式會自動繼續。", flush=True)
+            WebDriverWait(driver, 600, poll_frequency=1).until(
+                lambda d: (
+                    "登出" in d.find_element(By.ID, "login").text
+                    or (
+                        urlparse(d.current_url).path.endswith("/shelf_personalbook_list.cfm")
+                        and bool(d.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li"))
+                    )
+                )
+            )
+        print("已登入，正在開啟『我的書房 → 個人化書單』。", flush=True)
         driver.get(SHELF_URL)
         WebDriverWait(driver, 20).until(
             lambda d: d.find_elements(By.CSS_SELECTOR, "ul.reference-list-content > li")
@@ -317,7 +335,7 @@ def save_results(output: Path, rows: list[list[str]], issues: list[list[str]]) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, help="網站匯出的 .xls/.xlsx 路徑；省略時使用『待處理』中最新的檔案")
+    parser.add_argument("--input", type=Path, help="改用網站匯出的 .xls/.xlsx 檔案；預設會開 Chrome 讓使用者登入")
     parser.add_argument("--output", type=Path, help="指定完成檔路徑；可用來更新既有結果")
     parser.add_argument("--live", action="store_true", help="開啟 Chrome，由使用者登入後直接讀取個人書單")
     parser.add_argument("--delay", type=float, default=0.5, help="書目頁請求間隔（秒）")
@@ -326,18 +344,14 @@ def main() -> int:
         parser.error("--live 與 --input 不可同時使用")
     INPUT_DIR.mkdir(exist_ok=True)
     OUTPUT_DIR.mkdir(exist_ok=True)
-    if args.live:
+    if args.live or args.input is None:
         books, session = collect_live_books()
         today = date.today()
         label = f"個人書單{today.year - 1911:03d}{today.month:02d}{today.day:02d}"
     else:
-        candidates = [p for p in INPUT_DIR.iterdir() if p.suffix.lower() in (".xls", ".xlsx")]
-        source = args.input or (max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None)
-        if source is None:
-            parser.error(f"請把匯出的檔案放在 {INPUT_DIR}，或指定 --input")
-        books = read_input(source)
+        books = read_input(args.input)
         session = requests.Session()
-        label = source.stem
+        label = args.input.stem
     if not books:
         raise RuntimeError("來源中沒有書目。")
     rows, issues = fetch_results(books, session, max(args.delay, 0))
