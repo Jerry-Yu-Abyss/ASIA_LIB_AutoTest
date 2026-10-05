@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 .idea/
 .vscode/
+個人化書單分類號抓取/待處理/*
+!個人化書單分類號抓取/待處理/.gitkeep
+個人化書單分類號抓取/完成/*
+!個人化書單分類號抓取/完成/.gitkeep
