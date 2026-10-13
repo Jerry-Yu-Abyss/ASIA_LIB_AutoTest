@@ -3,6 +3,7 @@
 # 2. 每個關鍵字的第 1、5、10 筆搜尋結果都能點開書目詳情頁。
 # 3. 三筆書目都能從「索書號(卷期)」欄位取得分類號，才算該關鍵字成功。
 # 4. 所有關鍵字均符合上述條件，才算整體成功。
+# 找不到分類號時回傳「查無館藏」，並判定該筆失敗。
 
 """
 爬蟲目標：https://aulib.asia.edu.tw/webpac/search.cfm
@@ -23,19 +24,20 @@ from webdriver_manager.chrome import ChromeDriverManager
 TARGET_URL = "https://aulib.asia.edu.tw/webpac/search.cfm"
 RESULT_TITLE_SELECTOR = "#list .list_box .title ul li:last-child a"
 REQUIRED_POSITIONS = (1, 5, 10)
+NO_HOLDINGS = "查無館藏"
 CALL_NUMBER_PREFIX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{0,3}\d+(?:\.[A-Za-z0-9]+)*)")
 
 
-def get_classification_numbers(driver: webdriver.Chrome) -> list[str]:
-    """從書目詳情頁的「索書號(卷期)」欄位取出不重複的分類號。"""
+def get_classification_result(driver: webdriver.Chrome) -> str:
+    """回傳書目分類號；找不到「索書號(卷期)」或分類號時回傳「查無館藏」。"""
     try:
         tables = WebDriverWait(driver, 20).until(
             lambda d: d.find_elements(
                 By.XPATH, "//table[thead/tr/*[normalize-space()='索書號(卷期)']]"
             ) or False
         )
-    except TimeoutException as exc:
-        raise RuntimeError("書目詳情頁找不到索書號(卷期)欄位") from exc
+    except TimeoutException:
+        return NO_HOLDINGS
     numbers = []
     for table in tables:
         headers = [
@@ -53,7 +55,7 @@ def get_classification_numbers(driver: webdriver.Chrome) -> list[str]:
             match = CALL_NUMBER_PREFIX.search(raw_number)
             if match and match.group(1) not in numbers:
                 numbers.append(match.group(1))
-    return numbers
+    return "、".join(numbers) or NO_HOLDINGS
 
 
 def open_page(headless: bool = False) -> webdriver.Chrome:
@@ -175,7 +177,7 @@ def check_hot_keywords(driver: webdriver.Chrome) -> bool:
                                 raise RuntimeError("書名為空")
                             result["books"][position] = {
                                 "name": book_name,
-                                "numbers": [],
+                                "classification": "（未取得）",
                             }
 
                             before_detail_url = driver.current_url
@@ -189,13 +191,13 @@ def check_hot_keywords(driver: webdriver.Chrome) -> bool:
                             if is_service_unavailable(driver):
                                 raise RuntimeError("書目詳情頁回傳 Service Unavailable")
 
-                            numbers = get_classification_numbers(driver)
-                            result["books"][position]["numbers"] = numbers
-                            if not numbers:
-                                raise RuntimeError("索書號(卷期)欄位沒有分類號")
+                            classification = get_classification_result(driver)
+                            result["books"][position]["classification"] = classification
+                            if classification == NO_HOLDINGS:
+                                raise RuntimeError(NO_HOLDINGS)
                             print(
                                 f"      第 {position:>2} 筆：{book_name}；"
-                                f"分類號：{'、'.join(numbers)}"
+                                f"分類號：{classification}"
                             )
                             break
                         except Exception as e:
@@ -247,7 +249,7 @@ def check_hot_keywords(driver: webdriver.Chrome) -> bool:
                 book = item["books"].get(position)
                 if book:
                     print(f"         第 {position:>2} 筆：{book['name']}")
-                    print(f"                分類號：{'、'.join(book['numbers']) or '（未取得）'}")
+                    print(f"                分類號：{book['classification']}")
                 else:
                     print(f"         第 {position:>2} 筆：未取得")
             if item["reason"]:
