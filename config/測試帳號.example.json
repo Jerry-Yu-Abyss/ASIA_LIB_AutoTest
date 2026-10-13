@@ -1,0 +1,9 @@
+{
+  "username": "請填測試帳號",
+  "password": "請填測試密碼",
+  "captcha": {
+    "mode": "manual",
+    "gemini_api_key": "",
+    "gemini_model": ""
+  }
+}
