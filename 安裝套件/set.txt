@@ -1,1 +1,5 @@
-pip install selenium webdriver-manager
+在專案根目錄執行：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+
+若只需更新套件：
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt

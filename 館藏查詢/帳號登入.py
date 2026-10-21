@@ -128,10 +128,12 @@ def refresh_captcha(driver, image, target_url: str, config: dict):
         return open_login_form(driver, target_url, config)
 
 
-def login(driver, target_url: str, config: dict, mode: str = "manual") -> None:
+def login(driver, target_url: str, config: dict, mode: str = "manual", allow_manual_fallback: bool = True) -> None:
     """在既有 Selenium 瀏覽器登入，成功後回到 ``target_url``。"""
     if mode not in ("manual", "gemini"):
         raise RuntimeError("captcha.mode 必須是 manual 或 gemini")
+    if mode == "manual" and not allow_manual_fallback:
+        raise RuntimeError("無人值守模式不可使用手動驗證碼；請改用 Gemini")
     parsed_target = urlparse(target_url)
     if parsed_target.scheme != "https" or parsed_target.netloc != LIBRARY_DOMAIN:
         raise RuntimeError("登入目標必須是亞洲大學圖書館的 HTTPS 網址")
@@ -157,6 +159,8 @@ def login(driver, target_url: str, config: dict, mode: str = "manual") -> None:
                     print(f"辨識未成功：{exc}；正在更換驗證碼。", flush=True)
                     image = refresh_captcha(driver, image, target_url, config)
                     continue
+                if not allow_manual_fallback:
+                    raise RuntimeError(f"已達 {MAX_CAPTCHA_ATTEMPTS} 次上限，驗證碼仍未辨識成功：{exc}") from None
                 answer = prompt_captcha(image, f"已達 {MAX_CAPTCHA_ATTEMPTS} 次上限：{exc}。請手動確認。")
         else:
             answer = prompt_captcha(image)

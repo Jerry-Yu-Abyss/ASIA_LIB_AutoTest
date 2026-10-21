@@ -6,16 +6,16 @@
 
 ## 安裝
 
-在專案根目錄執行：
+在專案根目錄執行一次共用安裝指令（包含此工具所需套件）：
 
 ```powershell
-py -m pip install selenium webdriver-manager requests lxml openpyxl
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 ## 用選檔視窗選擇 XLS
 
 ```powershell
-py ".\個人化書單分類號抓取\抓取分類號.py"
+.\.venv\Scripts\python.exe ".\個人化書單分類號抓取\抓取分類號.py"
 ```
 
 選擇檔案後，請在 Chrome 自行輸入帳密；登入成功會自動開始，不必回終端機按 Enter。Chrome 會逐筆進入書目頁再返回書單。程式不讀取或儲存帳號密碼。取消選檔時，不會啟動瀏覽器。
@@ -23,7 +23,7 @@ py ".\個人化書單分類號抓取\抓取分類號.py"
 若要直接處理網站目前的「我的書房 → 個人化書單」而不選檔案：
 
 ```powershell
-py ".\個人化書單分類號抓取\抓取分類號.py" --live
+.\.venv\Scripts\python.exe ".\個人化書單分類號抓取\抓取分類號.py" --live
 ```
 
 此模式會核對頁面顯示的總筆數，筆數不一致時停止。
@@ -33,7 +33,7 @@ py ".\個人化書單分類號抓取\抓取分類號.py" --live
 也可以把網站匯出的 `.xls` 或 `.xlsx` 放進 [`待處理`](./待處理)，用 `--input` 略過 GUI 與登入，直接處理指定檔案：
 
 ```powershell
-py ".\個人化書單分類號抓取\抓取分類號.py" --input "C:\路徑\彥丞1151005.xls"
+.\.venv\Scripts\python.exe ".\個人化書單分類號抓取\抓取分類號.py" --input "C:\路徑\彥丞1151005.xls"
 ```
 
 網站匯出的舊式 `.xls` 若是 Excel 網頁格式，請連同它引用的 `.files` 資料夾一起放進 `待處理`。若只有單一真正的二進位 `.xls`，先用 Excel 另存成 `.xlsx`。

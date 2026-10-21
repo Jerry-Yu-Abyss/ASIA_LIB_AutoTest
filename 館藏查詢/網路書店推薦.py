@@ -110,6 +110,7 @@ def main() -> int:
     parser.add_argument("--captcha-mode", choices=("manual", "gemini"))
     parser.add_argument("--seed", type=int)
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--non-interactive", action="store_true", help="驗證碼失敗時直接回報，不等待人工輸入")
     parser.add_argument("--timeout", type=int, default=180, help="網路書店頁面載入上限秒數（預設 180）")
     args = parser.parse_args()
     if args.timeout < 30:
@@ -129,7 +130,7 @@ def main() -> int:
         print("抽中的詞：" + "、".join(f"{language} {word}" for language, word in selected), flush=True)
         driver = open_page(headless=args.headless)
         driver.set_page_load_timeout(args.timeout)
-        login(driver, RECOMMEND_URL, config, mode)
+        login(driver, RECOMMEND_URL, config, mode, allow_manual_fallback=not args.non_interactive)
         results = [check_search(driver, language, word, args.timeout) for language, word in selected]
         return 0 if print_report(results) else 1
     except Exception as exc:
