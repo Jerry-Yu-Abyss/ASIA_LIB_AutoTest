@@ -158,8 +158,8 @@ def detail_message(title: str, cases: list[dict]) -> str:
             entry.append(f"原因：{line_text(case['reason'])}")
         if case.get("books"):
             for book in case["books"]:
-                book_name = f" {line_text(book['name'])}｜" if book.get("name") else " "
-                entry.append(f"第{book['position']}筆{book_name}分類號：{line_text(book['classification'])}")
+                book_name = line_text(book.get("name") or "未取得")
+                entry.append(f"第{book['position']}筆 書名：{book_name}；分類號：{line_text(book['classification'])}")
                 if book["reason"]:
                     entry.append(f"  {line_text(book['reason'])}")
         else:
