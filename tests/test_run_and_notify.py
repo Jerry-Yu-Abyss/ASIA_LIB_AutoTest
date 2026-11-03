@@ -17,6 +17,12 @@ USER_ID = "U" + "a" * 32
 
 
 class LineRunnerTests(unittest.TestCase):
+    def test_only_four_runnable_catalog_scripts_are_scheduled(self):
+        self.assertEqual(
+            [script for _, script, _ in notify.SUITES],
+            ["關鍵字查詢.py", "中英查詢.py", "網路書店推薦.py", "新書報報.py"],
+        )
+
     def test_load_config_from_local_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "line.local.json"
@@ -72,7 +78,7 @@ class LineRunnerTests(unittest.TestCase):
         self.assertIn("無", messages[1])
 
     def test_no_holdings_reports_book_title(self):
-        cases = notify.normalize("熱門關鍵字", [{
+        cases = notify.normalize("關鍵字查詢", [{
             "keyword": "歷史", "success": False, "reason": "第 1 筆：查無館藏",
             "books": {"1": {"name": "台灣史", "classification": "查無館藏"},
                       "5": {"name": "世界史", "classification": "200"},

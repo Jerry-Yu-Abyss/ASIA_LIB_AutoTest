@@ -20,7 +20,7 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 USER_ID_PATTERN = re.compile(r"U[0-9a-f]{32}")
 LIMIT = 5000
 SUITES = (
-    ("熱門關鍵字", "關鍵字查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
+    ("關鍵字查詢", "關鍵字查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
     ("中英文查詢", "中英查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
     ("網路書店推薦", "網路書店推薦.py", "https://aulib.asia.edu.tw/webpac/recommend_book.cfm"),
     ("新書封面", "新書報報.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
@@ -81,7 +81,7 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        if name == "熱門關鍵字":
+        if name == "關鍵字查詢":
             label, passed = item.get("keyword", "未知關鍵字"), bool(item.get("success"))
             reason, books = item.get("reason", ""), item.get("books", {})
         elif name == "中英文查詢":
