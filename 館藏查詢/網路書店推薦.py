@@ -7,6 +7,7 @@
 """網路書店推薦載入測試；驗證碼可手動輸入或透過 Gemini 辨識。"""
 
 import argparse
+import json
 from pathlib import Path
 import random
 import sys
@@ -31,7 +32,7 @@ def clean_text(text: str) -> str:
 
 
 def check_book(driver, position: int) -> dict:
-    book = {"position": position, "name": "（未取得）", "loaded": False, "reason": ""}
+    book = {"position": position, "name": "（未取得）", "loaded": False, "reason": "", "url": "", "classification": "不適用（推薦按鈕測試）"}
     links = driver.find_elements(By.CSS_SELECTOR, BOOK_LINKS)
     if len(links) < position:
         book["reason"] = "搜尋結果不足，該筆不存在"
@@ -39,6 +40,8 @@ def check_book(driver, position: int) -> dict:
     book["name"] = clean_text(links[position - 1].text)
     try:
         links[position - 1].click()
+        frame = WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, DETAIL_FRAME)))
+        book["url"] = frame.get_attribute("src") or ""
         WebDriverWait(driver, 30).until(EC.frame_to_be_available_and_switch_to_it((By.CSS_SELECTOR, DETAIL_FRAME)))
         WebDriverWait(driver, 30).until(
             lambda d: clean_text(d.find_element(By.ID, "title").get_attribute("value") or "") == book["name"]
@@ -64,7 +67,7 @@ def check_book(driver, position: int) -> dict:
 
 
 def check_search(driver, language: str, word: str, timeout: int) -> dict:
-    result = {"language": language, "word": word, "books": [], "error": ""}
+    result = {"language": language, "word": word, "books": [], "error": "", "url": BOOKSTORE_URL}
     print(f"\n[{language}] 搜尋：{word}（等待網路書店回應，最多 {timeout} 秒）", flush=True)
     try:
         driver.get(BOOKSTORE_URL)
@@ -112,6 +115,7 @@ def main() -> int:
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--non-interactive", action="store_true", help="驗證碼失敗時直接回報，不等待人工輸入")
     parser.add_argument("--timeout", type=int, default=180, help="網路書店頁面載入上限秒數（預設 180）")
+    parser.add_argument("--report-json", type=Path)
     args = parser.parse_args()
     if args.timeout < 30:
         parser.error("--timeout 至少為 30 秒")
@@ -132,6 +136,8 @@ def main() -> int:
         driver.set_page_load_timeout(args.timeout)
         login(driver, RECOMMEND_URL, config, mode, allow_manual_fallback=not args.non_interactive)
         results = [check_search(driver, language, word, args.timeout) for language, word in selected]
+        if args.report_json:
+            args.report_json.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0 if print_report(results) else 1
     except Exception as exc:
         print(f"[FAIL] {str(exc).splitlines()[0] or type(exc).__name__}")

@@ -24,7 +24,7 @@ class LineRunnerTests(unittest.TestCase):
             with patch.dict("os.environ", {"LINE_CHANNEL_ACCESS_TOKEN": "", "LINE_USER_ID": ""}):
                 self.assertEqual(notify.load_line_config(path), ("secret", USER_ID))
 
-    def test_send_message_only_includes_summary(self):
+    def test_send_three_messages_in_one_request(self):
         class Response:
             status = 200
 
@@ -35,35 +35,56 @@ class LineRunnerTests(unittest.TestCase):
                 return False
 
         with patch.object(notify, "urlopen", return_value=Response()) as call:
-            notify.send_line_message("secret", USER_ID, "測試通過")
+            notify.send_line_messages("secret", USER_ID, ["摘要", "失敗", "通過"])
         request = call.call_args.args[0]
         self.assertEqual(request.full_url, notify.LINE_PUSH_URL)
-        self.assertEqual(json.loads(request.data)["messages"][0]["text"], "測試通過")
+        self.assertEqual([m["text"] for m in json.loads(request.data)["messages"]], ["摘要", "失敗", "通過"])
         self.assertNotIn("secret", request.data.decode("utf-8"))
 
-    def test_run_test_is_non_interactive(self):
+    def test_all_four_tests_run_in_background(self):
         result = subprocess.CompletedProcess([], 1, stdout="[FAIL] 驗證碼\n", stderr="")
-        with patch.object(notify.subprocess, "run", return_value=result) as call:
-            code, output = notify.run_test(None, 180, 1800)
-        self.assertEqual(code, 1)
-        self.assertIn("驗證碼", output)
-        command = call.call_args.args[0]
-        self.assertIn("--non-interactive", command)
-        self.assertIn("--headless", command)
+        with tempfile.TemporaryDirectory() as directory, patch.object(notify, "REPORT_DIR", Path(directory)):
+            with patch.object(notify.subprocess, "run", return_value=result) as call:
+                for suite in notify.SUITES:
+                    notify.run_suite(suite, None, 180, 1800, "test")
+                    command = call.call_args.args[0]
+                    self.assertIn("--headless", command)
+                    self.assertIn("--report-json", command)
+                    if suite[1] == "網路書店推薦.py":
+                        self.assertIn("--non-interactive", command)
 
-    def test_summary_does_not_forward_raw_output(self):
+    def test_summary_and_details_include_codes_but_no_urls(self):
         from datetime import datetime, timezone
+        cases = notify.normalize("中英文查詢", [{
+            "language": "中文", "word": "歷史", "url": "https://aulib.asia.edu.tw/webpac/search.cfm?q=x",
+            "books": {"1": {"classification": "123", "url": "https://aulib.asia.edu.tw/webpac/detail.cfm?id=1"},
+                      "5": {"classification": "456", "url": "https://aulib.asia.edu.tw/webpac/detail.cfm?id=5"},
+                      "10": {"classification": "789", "url": "https://aulib.asia.edu.tw/webpac/detail.cfm?id=10"}},
+            "errors": []
+        }], 0, notify.SUITES[1][2])
+        messages = notify.build_messages([{"name": "中英文查詢", "code": 0, "cases": cases}], datetime.now(timezone.utc))
+        self.assertEqual(len(messages), 3)
+        self.assertIn("未通過：0", messages[0])
+        self.assertIn("第1筆 分類號：123", messages[2])
+        self.assertNotIn("https://", "\n".join(messages))
+        self.assertIn("detail.cfm?id=1", cases[0]["books"][0]["url"])
+        self.assertIn("無", messages[1])
 
-        summary = notify.build_summary(1, "[FAIL] 驗證碼；password=secret", datetime.now(timezone.utc))
-        self.assertIn("登入／驗證碼", summary)
-        self.assertNotIn("secret", summary)
+    def test_failed_case_does_not_include_url(self):
+        cases = notify.normalize("新書封面", [{"section": "新書", "name": "A", "success": False,
+            "reason": "缺圖", "url": "https://evil.example/?token=secret"}], 1, notify.SUITES[3][2])
+        message = notify.detail_message("失敗", cases)
+        self.assertIn("缺圖", message)
+        self.assertNotIn("secret", message)
+        self.assertNotIn("https://", message)
+        self.assertIn(notify.SUITES[3][2], cases[0]["url"])
 
-    def test_summary_reports_gemini_503_without_raw_log(self):
-        from datetime import datetime, timezone
-
-        summary = notify.build_summary(1, "Gemini HTTP 503 password=secret", datetime.now(timezone.utc))
-        self.assertIn("Gemini 暫時無法回應（HTTP 503）", summary)
-        self.assertNotIn("secret", summary)
+    def test_url_embedded_in_reason_is_removed_from_line(self):
+        case = {"suite": "新書封面", "name": "測試", "reason": "失敗 https://example.test/path",
+                "classification": "未取得", "url": "https://aulib.asia.edu.tw/webpac/search.cfm"}
+        message = notify.detail_message("失敗", [case])
+        self.assertNotIn("https://", message)
+        self.assertIn("未取得", message)
 
     def test_gemini_503_is_transient(self):
         error = HTTPError("https://example.invalid", 503, "Unavailable", None, None)

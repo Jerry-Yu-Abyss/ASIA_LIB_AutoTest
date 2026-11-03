@@ -8,6 +8,9 @@
 需求套件：pip install selenium webdriver-manager
 """
 
+import argparse
+import json
+from pathlib import Path
 import time
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -109,6 +112,7 @@ def scan_slide_main(driver: webdriver.Chrome):
     最後輸出完整報告。
     """
     report        = []   # 每個 slideBlock 的統計
+    book_report   = []
     grand_total   = 0   # 全站應有總數
     grand_missing = 0   # 全站缺少總數
 
@@ -189,6 +193,16 @@ def scan_slide_main(driver: webdriver.Chrome):
                         reason = "預設佔位圖" if is_placeholder else "無任何圖片"
                         print(f"  │    ❌ [{bd_idx}] {book_name}（{reason}）")
                         block_missing_books.append(f"{book_name}（{reason}）")
+                    else:
+                        reason = ""
+                    book_report.append({
+                        "section": block_title,
+                        "name": book_name,
+                        "success": not reason,
+                        "reason": reason,
+                        "classification": "不適用（封面測試）",
+                        "url": anchors[0].get_attribute("href") if anchors else driver.current_url,
+                    })
 
                 print(f"  └─ slideBooks [{sb_idx}-{books_idx}] 結束")
 
@@ -228,10 +242,14 @@ def scan_slide_main(driver: webdriver.Chrome):
         else:
             print(f"  ❌ 共缺少 {grand_missing} 張封面")
         print("█" * 55)
+        if grand_total == 0:
+            raise RuntimeError("未找到任何新書")
+        return book_report
 
     except Exception as e:
         print(f"\n[!] scan_slide_main 發生錯誤，切換為診斷模式...\n")
         diagnose(driver)
+        raise
 
 
 def is_service_unavailable(driver: webdriver.Chrome) -> bool:
@@ -245,15 +263,21 @@ def main(max_retries: int = 10, retry_interval: int = 30):
     若遇到 Service Unavailable，每隔 retry_interval 秒自動重試，
     最多重試 max_retries 次。
     """
+    parser = argparse.ArgumentParser(description="新書封面檢查")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--report-json", type=Path)
+    args = parser.parse_args()
     driver = None
+    passed = False
 
-    for attempt in range(1, max_retries + 1):
+    try:
+      for attempt in range(1, max_retries + 1):
         print(f"\n{'='*40}")
         print(f"[+] 第 {attempt}/{max_retries} 次嘗試...")
 
         # 第一次建立 driver，之後重用同一個視窗直接重新整理
         if driver is None:
-            driver = open_page(headless=False)
+            driver = open_page(headless=args.headless)
         else:
             print(f"[+] 重新整理頁面...")
             driver.refresh()
@@ -276,15 +300,20 @@ def main(max_retries: int = 10, retry_interval: int = 30):
 
         # 頁面正常 → 執行掃描
         print(f"[+] 頁面正常，開始掃描...")
-        scan_slide_main(driver)
+        books = scan_slide_main(driver)
+        if args.report_json:
+            args.report_json.write_text(json.dumps(books, ensure_ascii=False, indent=2), encoding="utf-8")
+        passed = bool(books) and all(book["success"] for book in books)
         break   # 掃描完成，跳出迴圈
-
-    print("\n[+] 完成，按 Enter 關閉瀏覽器...")
-    input()
-    if driver:
-        driver.quit()
-    print("[+] 瀏覽器已關閉。")
+    except Exception as exc:
+        print(f"[FAIL] {str(exc).splitlines()[0] or type(exc).__name__}")
+    finally:
+        if not args.headless and driver:
+            input("\n[+] 完成，按 Enter 關閉瀏覽器...")
+        if driver:
+            driver.quit()
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -10,6 +10,9 @@
 需求套件：pip install selenium webdriver-manager
 """
 
+import argparse
+import json
+from pathlib import Path
 import re
 import time
 from selenium import webdriver
@@ -93,7 +96,7 @@ def is_service_unavailable(driver: webdriver.Chrome) -> bool:
     return "Service Unavailable" in driver.page_source
 
 
-def check_hot_keywords(driver: webdriver.Chrome) -> bool:
+def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None) -> bool:
     """
     逐一點擊熱門關鍵字，再點開第 1、5、10 筆書目並讀取分類號。
     所有關鍵字的三筆書目都成功取得分類號才回傳 True。
@@ -178,6 +181,7 @@ def check_hot_keywords(driver: webdriver.Chrome) -> bool:
                             result["books"][position] = {
                                 "name": book_name,
                                 "classification": "（未取得）",
+                                "url": "",
                             }
 
                             before_detail_url = driver.current_url
@@ -191,6 +195,7 @@ def check_hot_keywords(driver: webdriver.Chrome) -> bool:
                             if is_service_unavailable(driver):
                                 raise RuntimeError("書目詳情頁回傳 Service Unavailable")
 
+                            result["books"][position]["url"] = driver.current_url
                             classification = get_classification_result(driver)
                             result["books"][position]["classification"] = classification
                             if classification == NO_HOLDINGS:
@@ -263,22 +268,31 @@ def check_hot_keywords(driver: webdriver.Chrome) -> bool:
         else:
             print(f"  [FAIL] 測試未完全通過，共 {fail_count} 個關鍵字失敗")
         print("█" * 55)
-        return fail_count == 0
+        if report_path:
+            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return total > 0 and fail_count == 0
 
     except Exception as e:
         print(f"[!] check_hot_keywords 發生錯誤：{e}")
+        if report_path:
+            report_path.write_text(json.dumps(report if 'report' in locals() else [], ensure_ascii=False, indent=2), encoding="utf-8")
         return False
 
 
 def main(max_retries: int = 10, retry_interval: int = 30):
+    parser = argparse.ArgumentParser(description="熱門關鍵字與書目分類號測試")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--report-json", type=Path)
+    args = parser.parse_args()
     driver = None
-
-    for attempt in range(1, max_retries + 1):
+    passed = False
+    try:
+      for attempt in range(1, max_retries + 1):
         print(f"\n{'='*40}")
         print(f"[+] 第 {attempt}/{max_retries} 次嘗試...")
 
         if driver is None:
-            driver = open_page(headless=False)
+            driver = open_page(headless=args.headless)
         else:
             print(f"[+] 重新整理頁面...")
             driver.refresh()
@@ -299,15 +313,15 @@ def main(max_retries: int = 10, retry_interval: int = 30):
             continue
 
         print(f"[+] 頁面正常，開始測試...")
-        check_hot_keywords(driver)
+        passed = check_hot_keywords(driver, args.report_json)
         break
-
-    print("\n[+] 完成，按 Enter 關閉瀏覽器...")
-    input()
-    if driver:
-        driver.quit()
-    print("[+] 瀏覽器已關閉。")
+    finally:
+      if not args.headless and driver:
+          input("\n[+] 完成，按 Enter 關閉瀏覽器...")
+      if driver:
+          driver.quit()
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

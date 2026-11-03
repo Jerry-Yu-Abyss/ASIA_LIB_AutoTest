@@ -7,6 +7,8 @@
 """亞洲大學圖書館中英文詞搜尋測試。"""
 
 import argparse
+import json
+from pathlib import Path
 import random
 import sys
 
@@ -94,6 +96,7 @@ def check_search(driver, language: str, word: str) -> dict:
                     result["books"][position] = {
                         "name": book_name,
                         "classification": "（未取得）",
+                        "url": "",
                     }
 
                     before_detail_url = driver.current_url
@@ -107,6 +110,7 @@ def check_search(driver, language: str, word: str) -> dict:
                     if is_service_unavailable(driver):
                         raise RuntimeError("書目詳情頁回傳 Service Unavailable")
 
+                    result["books"][position]["url"] = driver.current_url
                     classification = get_classification_result(driver)
                     result["books"][position]["classification"] = classification
                     if classification == NO_HOLDINGS:
@@ -168,6 +172,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="隨機抽取中英文詞搜尋並檢查書目分類號")
     parser.add_argument("--seed", type=int, help="固定隨機抽詞結果，方便重複測試")
     parser.add_argument("--headless", action="store_true", help="背景執行 Chrome")
+    parser.add_argument("--report-json", type=Path)
     args = parser.parse_args()
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -182,6 +187,8 @@ def main() -> int:
     driver = open_page(headless=args.headless)
     try:
         results = [check_search(driver, language, word) for language, word in selected]
+        if args.report_json:
+            args.report_json.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0 if print_report(results) else 1
     finally:
         if not args.headless and sys.stdin.isatty():
