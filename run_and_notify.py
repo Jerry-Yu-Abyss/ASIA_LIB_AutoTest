@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from threading import Event, Timer
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -123,7 +124,7 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
     stem = f"{stamp}_{Path(script).stem}"
     report = REPORT_DIR / f"{stem}.json"
     log = REPORT_DIR / f"{stem}.log"
-    cmd = [sys.executable, str(ROOT / "館藏查詢" / script), "--headless", "--report-json", str(report)]
+    cmd = [sys.executable, "-u", str(ROOT / "館藏查詢" / script), "--headless", "--report-json", str(report)]
     if script == "網路書店推薦.py":
         cmd += ["--captcha-mode", "gemini", "--non-interactive", "--timeout", str(timeout)]
     if seed is not None and script in ("中英查詢.py", "網路書店推薦.py"):
@@ -131,17 +132,34 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     try:
-        result = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=max_runtime, check=False)
-        code, output = result.returncode, result.stdout + result.stderr
-    except subprocess.TimeoutExpired as exc:
-        code, output = 1, exc.stdout or b""
-        if isinstance(output, bytes):
-            output = output.decode("utf-8", errors="replace")
-        output += f"\n[FAIL] 執行超過 {max_runtime} 秒\n"
+        with subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, encoding="utf-8", errors="replace", bufsize=1) as process:
+            timed_out = Event()
+            def stop_on_timeout() -> None:
+                if process.poll() is None:
+                    timed_out.set()
+                    process.kill()
+            timer = Timer(max_runtime, stop_on_timeout)
+            timer.start()
+            try:
+                with log.open("w", encoding="utf-8") as log_file:
+                    for line in process.stdout:
+                        print(line, end="", flush=True)
+                        log_file.write(line)
+                        log_file.flush()
+                    code = process.wait()
+                    if timed_out.is_set():
+                        code = 1
+                        message = f"[FAIL] 執行超過 {max_runtime} 秒\n"
+                        print(message, end="", flush=True)
+                        log_file.write(message)
+            finally:
+                timer.cancel()
     except OSError:
-        code, output = 1, "[FAIL] 無法啟動測試程式\n"
-    log.write_text(output, encoding="utf-8")
+        code = 1
+        message = "[FAIL] 無法啟動測試程式\n"
+        print(message, end="", flush=True)
+        log.write_text(message, encoding="utf-8")
     try:
         data = json.loads(report.read_text(encoding="utf-8")) if report.exists() else None
     except (OSError, ValueError):

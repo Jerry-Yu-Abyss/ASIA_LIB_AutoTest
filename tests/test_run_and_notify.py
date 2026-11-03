@@ -2,7 +2,6 @@ import json
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -51,16 +50,36 @@ class LineRunnerTests(unittest.TestCase):
         self.assertNotIn("secret", request.data.decode("utf-8"))
 
     def test_all_four_tests_run_in_background(self):
-        result = subprocess.CompletedProcess([], 1, stdout="[FAIL] 驗證碼\n", stderr="")
-        with tempfile.TemporaryDirectory() as directory, patch.object(notify, "REPORT_DIR", Path(directory)):
-            with patch.object(notify.subprocess, "run", return_value=result) as call:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "館藏查詢"
+            scripts.mkdir()
+            for _, script, _ in notify.SUITES:
+                (scripts / script).write_text("import sys\nprint('PROGRESS', flush=True)\nprint(' '.join(sys.argv), flush=True)\n", encoding="utf-8")
+            with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root):
                 for suite in notify.SUITES:
-                    notify.run_suite(suite, None, 180, 1800, "test")
-                    command = call.call_args.args[0]
-                    self.assertIn("--headless", command)
-                    self.assertIn("--report-json", command)
+                    with redirect_stdout(StringIO()) as output:
+                        code, _, log = notify.run_suite(suite, None, 180, 1800, "test")
+                    self.assertEqual(code, 0)
+                    self.assertIn("PROGRESS", output.getvalue())
+                    self.assertIn("--headless", log.read_text(encoding="utf-8"))
+                    self.assertIn("--report-json", log.read_text(encoding="utf-8"))
                     if suite[1] == "網路書店推薦.py":
-                        self.assertIn("--non-interactive", command)
+                        self.assertIn("--non-interactive", log.read_text(encoding="utf-8"))
+
+    def test_runner_keeps_timeout_with_live_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "館藏查詢"
+            scripts.mkdir()
+            (scripts / "關鍵字查詢.py").write_text(
+                "import time\nprint('STARTED', flush=True)\ntime.sleep(3)\n", encoding="utf-8"
+            )
+            with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root), redirect_stdout(StringIO()) as output:
+                code, _, log = notify.run_suite(notify.SUITES[0], None, 180, 1, "timeout")
+            self.assertEqual(code, 1)
+            self.assertIn("STARTED", output.getvalue())
+            self.assertIn("執行超過 1 秒", log.read_text(encoding="utf-8"))
 
     def test_summary_and_details_include_codes_but_no_urls(self):
         from datetime import datetime, timezone
