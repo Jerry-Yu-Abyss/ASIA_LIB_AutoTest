@@ -98,7 +98,9 @@ def build_summary(exit_code: int, output: str, when: datetime) -> str:
         lines.append(f"查詢通過：{match.group(1)}/{match.group(2)}")
     else:
         # 只從已知錯誤分類產生短訊，不將網站輸出或例外內容送到 LINE。
-        if "Gemini" in output or "驗證碼" in output:
+        if "Gemini" in output and "HTTP 503" in output:
+            lines.append("原因：Gemini 暫時無法回應（HTTP 503）")
+        elif "Gemini" in output or "驗證碼" in output:
             lines.append("階段：登入／驗證碼")
         elif "總執行時間超過" in output:
             lines.append("階段：執行逾時")

@@ -9,12 +9,14 @@ import base64
 import json
 import os
 from pathlib import Path
+import random
 import re
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from selenium.common.exceptions import NoAlertPresentException, TimeoutException
+from selenium.common.exceptions import NoAlertPresentException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -25,6 +27,14 @@ DEFAULT_CONFIG = ROOT / "config" / "測試帳號.local.json"
 DEFAULT_MODEL = "gemini-flash-latest"
 LIBRARY_DOMAIN = "aulib.asia.edu.tw"
 MAX_CAPTCHA_ATTEMPTS = 5
+
+
+class GeminiTransientError(RuntimeError):
+    """Gemini 的暫時性錯誤，可在稍後更換驗證碼重試。"""
+
+
+class CaptchaImageTimeout(RuntimeError):
+    """驗證碼圖片沒有在時間內變成可截取狀態。"""
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> dict:
@@ -69,10 +79,12 @@ def recognize_captcha(png: bytes, settings: dict) -> str:
     except HTTPError as exc:
         # 不輸出原始回應／請求，避免金鑰出現在錯誤報告。
         if exc.code in (429, 500, 502, 503, 504):
-            raise RuntimeError(f"Gemini 暫時無法回應（HTTP {exc.code}）") from None
+            raise GeminiTransientError(f"Gemini 暫時無法回應（HTTP {exc.code}）") from None
         raise RuntimeError(f"Gemini 回傳 HTTP {exc.code}，請檢查金鑰、模型與配額") from None
-    except (URLError, TimeoutError, ValueError):
-        raise RuntimeError("Gemini 辨識連線或回應失敗") from None
+    except (URLError, TimeoutError):
+        raise GeminiTransientError("Gemini 辨識連線或回應失敗") from None
+    except ValueError:
+        raise RuntimeError("Gemini 回應格式不正確") from None
     try:
         answer = "".join(
             part.get("text", "") for part in data["candidates"][0]["content"]["parts"]
@@ -99,6 +111,28 @@ def prompt_captcha(image, message: str = "") -> str:
         raise RuntimeError("無法從目前終端機輸入驗證碼；請在可互動的終端機執行") from None
 
 
+def wait_for_captcha_image(driver, timeout: int = 20):
+    """驗證碼元素出現不代表圖片可截取；須等到實際尺寸非零。"""
+    def ready(current_driver):
+        try:
+            image = current_driver.find_element(By.CSS_SELECTOR, "#captcha_span img")
+            if not image.is_displayed():
+                return False
+            size = image.size
+            if size["width"] <= 0 or size["height"] <= 0:
+                return False
+            if not image.get_property("complete") or image.get_property("naturalWidth") <= 0:
+                return False
+            return image
+        except StaleElementReferenceException:
+            return False
+
+    try:
+        return WebDriverWait(driver, timeout).until(ready)
+    except TimeoutException:
+        raise CaptchaImageTimeout("驗證碼圖片未能載入") from None
+
+
 def open_login_form(driver, target_url: str, config: dict):
     """開啟登入視窗並填入帳密，回傳目前的驗證碼圖片元素。"""
     driver.switch_to.default_content()
@@ -113,7 +147,7 @@ def open_login_form(driver, target_url: str, config: dict):
     WebDriverWait(driver, 20).until(EC.visibility_of_element_located((By.ID, "hidid")))
     driver.find_element(By.ID, "hidid").send_keys(config["username"])
     driver.find_element(By.ID, "password").send_keys(config["password"])
-    return driver.find_element(By.CSS_SELECTOR, "#captcha_span img")
+    return wait_for_captcha_image(driver)
 
 
 def refresh_captcha(driver, image, target_url: str, config: dict):
@@ -121,10 +155,8 @@ def refresh_captcha(driver, image, target_url: str, config: dict):
     try:
         driver.find_element(By.ID, "captcha_span").click()
         WebDriverWait(driver, 15).until(EC.staleness_of(image))
-        return WebDriverWait(driver, 15).until(
-            EC.visibility_of_element_located((By.CSS_SELECTOR, "#captcha_span img"))
-        )
-    except TimeoutException:
+        return wait_for_captcha_image(driver, timeout=15)
+    except (TimeoutException, CaptchaImageTimeout):
         return open_login_form(driver, target_url, config)
 
 
@@ -156,7 +188,12 @@ def login(driver, target_url: str, config: dict, mode: str = "manual", allow_man
                     raise RuntimeError(f"兩個模型辨識不同（{answer} / {confirmation}）")
             except RuntimeError as exc:
                 if attempt < MAX_CAPTCHA_ATTEMPTS:
-                    print(f"辨識未成功：{exc}；正在更換驗證碼。", flush=True)
+                    if isinstance(exc, GeminiTransientError):
+                        delay = min(2 ** (attempt - 1), 8) + random.uniform(0, 0.5)
+                        print(f"辨識未成功：{exc}；等待 {delay:.1f} 秒後更換驗證碼。", flush=True)
+                        time.sleep(delay)
+                    else:
+                        print(f"辨識未成功：{exc}；正在更換驗證碼。", flush=True)
                     image = refresh_captcha(driver, image, target_url, config)
                     continue
                 if not allow_manual_fallback:
