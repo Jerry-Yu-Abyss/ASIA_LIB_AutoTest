@@ -150,24 +150,38 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
 
 def detail_message(title: str, cases: list[dict]) -> str:
     if not cases:
-        return title + "\n無"
+        return title + "\n\n無"
     lines = [title]
+    suite_counts = {}
+    for case in cases:
+        suite_counts[case["suite"]] = suite_counts.get(case["suite"], 0) + 1
+    current_suite = None
+    position_in_suite = 0
     for index, case in enumerate(cases):
-        entry = [f"【{case['suite']}】{line_text(case['name'])}"]
+        if case["suite"] != current_suite:
+            current_suite = case["suite"]
+            position_in_suite = 0
+            heading = f"【{line_text(current_suite)}】{suite_counts[current_suite]} 筆"
+        else:
+            heading = ""
+        position_in_suite += 1
+        entry = [f"{position_in_suite}. {line_text(case['name'])}"]
         if case["reason"]:
             entry.append(f"原因：{line_text(case['reason'])}")
         if case.get("books"):
             for book in case["books"]:
                 book_name = line_text(book.get("name") or "未取得")
-                entry.append(f"第{book['position']}筆 書名：{book_name}；分類號：{line_text(book['classification'])}")
+                entry.append(f"  第 {book['position']} 筆｜書名：{book_name}")
+                entry.append(f"    分類號：{line_text(book['classification'])}")
                 if book["reason"]:
-                    entry.append(f"  {line_text(book['reason'])}")
+                    entry.append(f"    原因：{line_text(book['reason'])}")
         else:
-            entry.append(f"分類號：{line_text(case['classification'])}")
-        if len("\n\n".join(lines + ["\n".join(entry)])) + 80 > LIMIT:
+            entry.append(f"  分類號：{line_text(case['classification'])}")
+        addition = ([heading] if heading else []) + ["\n".join(entry)]
+        if len("\n\n".join(lines + addition)) + 80 > LIMIT:
             lines.append(f"另有 {len(cases)-index} 筆超過 LINE 字數上限；完整資料見本機 .local/reports 的 JSON 報告。")
             break
-        lines.append("\n".join(entry))
+        lines.extend(addition)
     return "\n\n".join(lines)
 
 def build_messages(runs: list[dict], when: datetime) -> list[str]:
@@ -182,15 +196,23 @@ def build_messages(runs: list[dict], when: datetime) -> list[str]:
                        "passed": True, "reason": "", "classification": "不適用（封面測試）",
                        "url": SUITES[3][2]})
     failed_suites = [run["name"] for run in runs if run["code"] != 0 or any(not c["passed"] for c in run["cases"])]
-    summary = "\n".join([
-        "亞洲大學圖書館｜館藏查詢自動測試摘要",
+    summary_lines = [
+        "📚 館藏查詢｜測試摘要（1/3）",
         f"時間：{when.astimezone().strftime('%Y-%m-%d %H:%M %Z')}",
-        f"測試項目：{len(runs)}；未通過：{len(failed_suites)}；通過：{len(runs)-len(failed_suites)}",
-        f"資料筆數：未通過 {len(failed)}；通過 {passed_count}",
-        "未通過項目：" + ("、".join(failed_suites) if failed_suites else "無"),
-    ])
-    return [summary, detail_message("館藏查詢｜未通過測試詳細資訊", failed),
-            detail_message("館藏查詢｜通過測試詳細資訊", passed)]
+        f"整體：{len(failed_suites)}/{len(runs)} 項未通過",
+        f"資料：{len(failed)} 筆未通過、{passed_count} 筆通過",
+        "",
+        "各項結果",
+    ]
+    for run in runs:
+        failed_count = sum(not case["passed"] for case in run["cases"])
+        status = "❌" if run["code"] != 0 or failed_count else "✅"
+        summary_lines.append(f"{status} {run['name']}｜{failed_count}/{len(run['cases'])} 筆未通過")
+    summary_lines.append("")
+    summary_lines.append("下一則：未通過明細；第三則：通過明細")
+    summary = "\n".join(summary_lines)
+    return [summary, detail_message(f"❌ 未通過明細（2/3）｜{len(failed)} 筆", failed),
+            detail_message(f"✅ 通過明細（3/3）｜{passed_count} 筆", passed)]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="執行館藏查詢全部測試並發送三則 LINE 回報")

@@ -64,8 +64,9 @@ class LineRunnerTests(unittest.TestCase):
         }], 0, notify.SUITES[1][2])
         messages = notify.build_messages([{"name": "中英文查詢", "code": 0, "cases": cases}], datetime.now(timezone.utc))
         self.assertEqual(len(messages), 3)
-        self.assertIn("未通過：0", messages[0])
-        self.assertIn("第1筆 書名：未取得；分類號：123", messages[2])
+        self.assertIn("0/1 項未通過", messages[0])
+        self.assertIn("✅ 中英文查詢｜0/1 筆未通過", messages[0])
+        self.assertIn("第 1 筆｜書名：未取得\n    分類號：123", messages[2])
         self.assertNotIn("https://", "\n".join(messages))
         self.assertIn("detail.cfm?id=1", cases[0]["books"][0]["url"])
         self.assertIn("無", messages[1])
@@ -78,7 +79,7 @@ class LineRunnerTests(unittest.TestCase):
                       "10": {"name": "文化史", "classification": "300"}},
         }], 1, notify.SUITES[0][2])
         message = notify.detail_message("未通過", cases)
-        self.assertIn("第1筆 書名：台灣史；分類號：查無館藏", message)
+        self.assertIn("第 1 筆｜書名：台灣史\n    分類號：查無館藏", message)
         self.assertNotIn("https://", message)
 
     def test_failed_case_does_not_include_url(self):
