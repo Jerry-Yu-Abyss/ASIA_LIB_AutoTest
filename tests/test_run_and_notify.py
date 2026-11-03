@@ -3,10 +3,13 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import run_and_notify as notify
 from 館藏查詢 import 帳號登入 as login_module

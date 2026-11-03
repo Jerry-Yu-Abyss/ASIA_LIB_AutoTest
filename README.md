@@ -114,6 +114,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\setup.ps1"
 
 完整執行的日誌與逐筆網址保存在 `.local\reports`。上述指令不需要先啟用虛擬環境。
 
+若只要檢查程式本身的 13 項單元測試，可執行下列指令；這不會啟動瀏覽器或發送 LINE：
+
+```cmd
+.\.venv\Scripts\python.exe ".\tests\test_run_and_notify.py"
+```
+
 ### 分項說明
 
 在專案根目錄執行下列其中一項，不需啟用虛擬環境。
