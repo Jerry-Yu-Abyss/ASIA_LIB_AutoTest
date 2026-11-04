@@ -21,6 +21,10 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+if __package__:
+    from .網頁載入 import get_with_retries
+else:
+    from 網頁載入 import get_with_retries
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "測試帳號.local.json"
@@ -136,7 +140,7 @@ def wait_for_captcha_image(driver, timeout: int = 20):
 def open_login_form(driver, target_url: str, config: dict):
     """開啟登入視窗並填入帳密，回傳目前的驗證碼圖片元素。"""
     driver.switch_to.default_content()
-    driver.get(target_url)
+    get_with_retries(driver, target_url)
     driver.find_element(By.LINK_TEXT, "登入").click()
     frame = WebDriverWait(driver, 20).until(
         EC.presence_of_element_located((By.CSS_SELECTOR, "iframe[src*='login_iframe.cfm']"))
@@ -209,7 +213,7 @@ def login(driver, target_url: str, config: dict, mode: str = "manual", allow_man
             driver.switch_to.default_content()
             # 網站可能保留登入 iframe，不能用密碼欄位是否消失判斷登入成功。
             WebDriverWait(driver, 30).until(EC.visibility_of_element_located((By.LINK_TEXT, "登出")))
-            driver.get(target_url)
+            get_with_retries(driver, target_url)
             WebDriverWait(driver, 15).until(EC.visibility_of_element_located((By.LINK_TEXT, "登出")))
         except Exception:
             try:

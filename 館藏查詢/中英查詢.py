@@ -25,6 +25,7 @@ from 關鍵字查詢 import (
     is_service_unavailable,
     open_page,
 )
+from 網頁載入 import get_with_retries
 
 CHINESE_WORDS = (
     "心理", "設計", "管理", "科技", "藝術",
@@ -48,7 +49,7 @@ def check_search(driver, language: str, word: str) -> dict:
     print(f"\n[{language}] 搜尋：{word}")
 
     try:
-        driver.get(TARGET_URL)
+        get_with_retries(driver, TARGET_URL)
         search_input = WebDriverWait(driver, 20).until(
             lambda d: d.find_element(By.ID, "ss_keyword")
         )
@@ -172,6 +173,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="隨機抽取中英文詞搜尋並檢查書目分類號")
     parser.add_argument("--seed", type=int, help="固定隨機抽詞結果，方便重複測試")
     parser.add_argument("--headless", action="store_true", help="背景執行 Chrome")
+    parser.add_argument("--non-interactive", action="store_true", help="完成後直接關閉瀏覽器")
     parser.add_argument("--report-json", type=Path)
     args = parser.parse_args()
 
@@ -184,14 +186,18 @@ def main() -> int:
     )
     print("本次抽中的詞：" + "、".join(f"{language} {word}" for language, word in selected))
 
-    driver = open_page(headless=args.headless)
+    try:
+        driver = open_page(headless=args.headless)
+    except RuntimeError as exc:
+        print(f"[FAIL] {exc}")
+        return 1
     try:
         results = [check_search(driver, language, word) for language, word in selected]
         if args.report_json:
             args.report_json.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
         return 0 if print_report(results) else 1
     finally:
-        if not args.headless and sys.stdin.isatty():
+        if not args.headless and not args.non_interactive and sys.stdin.isatty():
             input("\n按 Enter 關閉瀏覽器...")
         driver.quit()
 

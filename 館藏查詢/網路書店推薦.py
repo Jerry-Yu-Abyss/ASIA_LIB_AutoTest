@@ -19,6 +19,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from 中英查詢 import CHINESE_WORDS, ENGLISH_WORDS
 from 關鍵字查詢 import REQUIRED_POSITIONS, open_page
+from 網頁載入 import get_with_retries
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "測試帳號.local.json"
 RECOMMEND_URL = "https://aulib.asia.edu.tw/webpac/recommend.cfm"
@@ -70,7 +71,7 @@ def check_search(driver, language: str, word: str, timeout: int) -> dict:
     result = {"language": language, "word": word, "books": [], "error": "", "url": BOOKSTORE_URL}
     print(f"\n[{language}] 搜尋：{word}（等待網路書店回應，最多 {timeout} 秒）", flush=True)
     try:
-        driver.get(BOOKSTORE_URL)
+        get_with_retries(driver, BOOKSTORE_URL)
         keyword = WebDriverWait(driver, 20).until(EC.visibility_of_element_located((By.ID, "keyword")))
         keyword.clear()
         keyword.send_keys(word)

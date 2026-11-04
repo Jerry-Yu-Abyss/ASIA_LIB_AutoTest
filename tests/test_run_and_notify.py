@@ -12,7 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import run_and_notify as notify
 from 館藏查詢 import 帳號登入 as login_module
+from 館藏查詢 import 關鍵字查詢 as keyword_module
+from 館藏查詢 import 網頁載入 as loading_module
 from 館藏查詢.帳號登入 import login
+from selenium.common.exceptions import WebDriverException
 
 
 USER_ID = "U" + "a" * 32
@@ -24,6 +27,28 @@ class LineRunnerTests(unittest.TestCase):
             [script for _, script, _ in notify.SUITES],
             ["關鍵字查詢.py", "中英查詢.py", "網路書店推薦.py", "新書報報.py"],
         )
+
+    def test_only_one_suite_still_sends_three_line_messages(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(notify, "REPORT_DIR", Path(directory)), \
+             patch.object(notify, "load_line_config", return_value=("token", USER_ID)), \
+             patch.object(notify, "run_suite", return_value=(
+                 1, [{"suite": "新書封面", "name": "書名", "passed": False,
+                      "reason": "缺圖", "classification": "不適用（封面測試）",
+                      "url": notify.SUITES[3][2]}], Path(directory) / "test.log"
+             )) as run, \
+             patch.object(notify, "send_line_messages") as send, \
+             patch.object(sys, "argv", ["run_and_notify.py", "--only", "新書封面"]), \
+             redirect_stdout(StringIO()):
+            result = notify.main()
+        self.assertEqual(result, 1)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][0], "新書封面")
+        messages = send.call_args.args[2]
+        self.assertEqual(len(messages), 3)
+        self.assertIn("整體：0/1 項通過", messages[0])
+        self.assertIn("未通過❌:新書封面", messages[0])
+        self.assertIn("缺圖", messages[1])
 
     def test_load_config_from_local_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -49,7 +74,7 @@ class LineRunnerTests(unittest.TestCase):
         self.assertEqual([m["text"] for m in json.loads(request.data)["messages"]], ["摘要", "失敗", "通過"])
         self.assertNotIn("secret", request.data.decode("utf-8"))
 
-    def test_all_four_tests_run_in_background(self):
+    def test_all_four_tests_show_browser_by_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts = root / "館藏查詢"
@@ -62,10 +87,12 @@ class LineRunnerTests(unittest.TestCase):
                         code, _, log = notify.run_suite(suite, None, 180, 1800, "test")
                     self.assertEqual(code, 0)
                     self.assertIn("PROGRESS", output.getvalue())
-                    self.assertIn("--headless", log.read_text(encoding="utf-8"))
+                    self.assertNotIn("--headless", log.read_text(encoding="utf-8"))
+                    self.assertIn("--non-interactive", log.read_text(encoding="utf-8"))
                     self.assertIn("--report-json", log.read_text(encoding="utf-8"))
-                    if suite[1] == "網路書店推薦.py":
-                        self.assertIn("--non-interactive", log.read_text(encoding="utf-8"))
+                with redirect_stdout(StringIO()):
+                    _, _, log = notify.run_suite(notify.SUITES[0], None, 180, 1800, "background", headless=True)
+                self.assertIn("--headless", log.read_text(encoding="utf-8"))
 
     def test_runner_keeps_timeout_with_live_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -81,6 +108,75 @@ class LineRunnerTests(unittest.TestCase):
             self.assertIn("STARTED", output.getvalue())
             self.assertIn("執行超過 1 秒", log.read_text(encoding="utf-8"))
 
+    def test_connection_timeout_is_reported_clearly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "館藏查詢"
+            scripts.mkdir()
+            (scripts / "中英查詢.py").write_text(
+                "print('[FAIL] 圖書館網站連線逾時，請稍後再試或檢查網路')\nraise SystemExit(1)\n",
+                encoding="utf-8",
+            )
+            with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root), redirect_stdout(StringIO()):
+                code, cases, _ = notify.run_suite(notify.SUITES[1], None, 180, 10, "offline")
+        self.assertEqual(code, 1)
+        self.assertIn("圖書館網站連線逾時", cases[0]["reason"])
+
+    def test_browser_connection_timeout_closes_driver(self):
+        class Driver:
+            closed = False
+            attempts = 0
+
+            def execute_script(self, *_):
+                pass
+
+            def set_page_load_timeout(self, *_):
+                pass
+
+            def get(self, *_):
+                self.attempts += 1
+                raise WebDriverException("net::ERR_CONNECTION_TIMED_OUT")
+
+            def quit(self):
+                self.closed = True
+
+        driver = Driver()
+        with patch.object(keyword_module.ChromeDriverManager, "install", return_value="driver"), \
+             patch.object(keyword_module.webdriver, "Chrome", return_value=driver), \
+             redirect_stdout(StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "圖書館網站連線逾時"):
+                keyword_module.open_page()
+        self.assertTrue(driver.closed)
+        self.assertEqual(driver.attempts, 4)
+
+    def test_connection_timeout_reloads_up_to_three_times(self):
+        class Driver:
+            attempts = 0
+
+            def get(self, *_):
+                self.attempts += 1
+                if self.attempts < 3:
+                    raise WebDriverException("net::ERR_CONNECTION_TIMED_OUT")
+
+        driver = Driver()
+        with redirect_stdout(StringIO()) as output:
+            loading_module.get_with_retries(driver, "https://aulib.asia.edu.tw/webpac/search.cfm")
+        self.assertEqual(driver.attempts, 3)
+        self.assertIn("重新載入 2/3", output.getvalue())
+
+    def test_other_browser_error_does_not_reload(self):
+        class Driver:
+            attempts = 0
+
+            def get(self, *_):
+                self.attempts += 1
+                raise WebDriverException("invalid session id")
+
+        driver = Driver()
+        with self.assertRaises(WebDriverException):
+            loading_module.get_with_retries(driver, "https://aulib.asia.edu.tw/webpac/search.cfm")
+        self.assertEqual(driver.attempts, 1)
+
     def test_summary_and_details_include_codes_but_no_urls(self):
         from datetime import datetime, timezone
         cases = notify.normalize("中英文查詢", [{
@@ -92,12 +188,29 @@ class LineRunnerTests(unittest.TestCase):
         }], 0, notify.SUITES[1][2])
         messages = notify.build_messages([{"name": "中英文查詢", "code": 0, "cases": cases}], datetime.now(timezone.utc))
         self.assertEqual(len(messages), 3)
-        self.assertIn("0/1 項未通過", messages[0])
-        self.assertIn("✅ 中英文查詢｜0/1 筆未通過", messages[0])
-        self.assertIn("第 1 筆｜書名：未取得\n    分類號：123", messages[2])
+        self.assertIn("整體：1/1 項通過", messages[0])
+        self.assertIn("未通過❌:無", messages[0])
+        self.assertIn("✅ 第 1 筆｜書名：未取得\n    分類號：123", messages[2])
         self.assertNotIn("https://", "\n".join(messages))
         self.assertIn("detail.cfm?id=1", cases[0]["books"][0]["url"])
         self.assertIn("無", messages[1])
+
+    def test_summary_lists_failed_suite_names_without_case_counts(self):
+        from datetime import datetime, timezone
+        runs = [
+            {"name": "關鍵字查詢", "code": 1, "cases": [{"suite": "關鍵字查詢", "name": "A", "passed": False, "reason": "",
+                                                     "classification": "未取得", "url": notify.SUITES[0][2]}]},
+            {"name": "中英文查詢", "code": 1, "cases": [{"suite": "中英文查詢", "name": "B", "passed": False, "reason": "",
+                                                     "classification": "未取得", "url": notify.SUITES[1][2]}]},
+            {"name": "網路書店推薦", "code": 0, "cases": [{"suite": "網路書店推薦", "name": "C", "passed": True, "reason": "",
+                                                       "classification": "不適用", "url": notify.SUITES[2][2]}]},
+            {"name": "新書封面", "code": 0, "cases": [{"suite": "新書封面", "name": "D", "passed": True, "reason": "",
+                                                   "classification": "不適用", "url": notify.SUITES[3][2]}]},
+        ]
+        summary = notify.build_messages(runs, datetime.now(timezone.utc))[0]
+        self.assertEqual(len(summary.splitlines()), 4)
+        self.assertIn("整體：2/4 項通過", summary)
+        self.assertIn("未通過❌:關鍵字查詢, 中英文查詢", summary)
 
     def test_no_holdings_reports_book_title(self):
         cases = notify.normalize("關鍵字查詢", [{
@@ -107,8 +220,18 @@ class LineRunnerTests(unittest.TestCase):
                       "10": {"name": "文化史", "classification": "300"}},
         }], 1, notify.SUITES[0][2])
         message = notify.detail_message("未通過", cases)
-        self.assertIn("第 1 筆｜書名：台灣史\n    分類號：查無館藏", message)
+        self.assertIn("❌ 第 1 筆｜書名：台灣史\n    分類號：查無館藏", message)
+        self.assertNotIn("原因：第 1 筆：查無館藏", message)
+        self.assertIn("✅ 第 5 筆｜書名：世界史", message)
         self.assertNotIn("https://", message)
+
+    def test_other_failure_reason_remains_after_no_holdings_is_marked(self):
+        case = {"suite": "中英文查詢", "name": "中文 科技", "reason": "第 1 筆：查無館藏；第 5 筆：載入逾時",
+                "books": [{"position": 1, "name": "台灣史", "classification": "查無館藏", "reason": ""},
+                          {"position": 5, "name": "世界史", "classification": "未取得", "reason": ""}]}
+        message = notify.detail_message("未通過", [case])
+        self.assertIn("原因：第 5 筆：載入逾時", message)
+        self.assertNotIn("原因：第 1 筆：查無館藏", message)
 
     def test_failed_case_does_not_include_url(self):
         cases = notify.normalize("新書封面", [{"section": "新書", "name": "A", "success": False,

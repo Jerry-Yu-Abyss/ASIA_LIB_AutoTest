@@ -119,20 +119,25 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
     return cases or normalize(name, None, code, fallback)
 
 def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
-              max_runtime: int, stamp: str) -> tuple[int, list[dict], Path]:
+              max_runtime: int, stamp: str, headless: bool = False) -> tuple[int, list[dict], Path]:
     name, script, fallback = suite
     stem = f"{stamp}_{Path(script).stem}"
     report = REPORT_DIR / f"{stem}.json"
     log = REPORT_DIR / f"{stem}.log"
-    cmd = [sys.executable, "-u", str(ROOT / "館藏查詢" / script), "--headless", "--report-json", str(report)]
+    cmd = [sys.executable, "-u", str(ROOT / "館藏查詢" / script),
+           "--report-json", str(report), "--non-interactive"]
+    if headless:
+        cmd.append("--headless")
     if script == "網路書店推薦.py":
-        cmd += ["--captcha-mode", "gemini", "--non-interactive", "--timeout", str(timeout)]
+        cmd += ["--captcha-mode", "gemini", "--timeout", str(timeout)]
     if seed is not None and script in ("中英查詢.py", "網路書店推薦.py"):
         cmd += ["--seed", str(seed)]
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    connection_error = False
     try:
-        with subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        with subprocess.Popen(cmd, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, encoding="utf-8", errors="replace", bufsize=1) as process:
             timed_out = Event()
             def stop_on_timeout() -> None:
@@ -144,6 +149,8 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
             try:
                 with log.open("w", encoding="utf-8") as log_file:
                     for line in process.stdout:
+                        if "圖書館網站連線逾時" in line or "ERR_CONNECTION_TIMED_OUT" in line:
+                            connection_error = True
                         print(line, end="", flush=True)
                         log_file.write(line)
                         log_file.flush()
@@ -164,7 +171,10 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
         data = json.loads(report.read_text(encoding="utf-8")) if report.exists() else None
     except (OSError, ValueError):
         data = None
-    return code, normalize(name, data, code, fallback), log
+    cases = normalize(name, data, code, fallback)
+    if data is None and connection_error:
+        cases[0]["reason"] = "圖書館網站連線逾時，請稍後再試或檢查網路"
+    return code, cases, log
 
 def detail_message(title: str, cases: list[dict]) -> str:
     if not cases:
@@ -184,14 +194,26 @@ def detail_message(title: str, cases: list[dict]) -> str:
             heading = ""
         position_in_suite += 1
         entry = [f"{position_in_suite}. {line_text(case['name'])}"]
-        if case["reason"]:
-            entry.append(f"原因：{line_text(case['reason'])}")
+        no_holdings_positions = {
+            str(book["position"]) for book in case.get("books", [])
+            if book.get("classification") == "查無館藏"
+        }
+        reasons = []
+        for part in str(case["reason"] or "").split("；"):
+            part = part.strip()
+            match = re.fullmatch(r"第\s*(\d+)\s*筆\s*[:：]\s*查無館藏", part)
+            if part and not (match and match.group(1) in no_holdings_positions):
+                reasons.append(part)
+        if reasons:
+            entry.append(f"原因：{line_text('；'.join(reasons))}")
         if case.get("books"):
             for book in case["books"]:
                 book_name = line_text(book.get("name") or "未取得")
-                entry.append(f"  第 {book['position']} 筆｜書名：{book_name}")
+                failed_book = book["classification"] in ("查無館藏", "未取得", "（未取得）") or bool(book["reason"])
+                mark = "❌" if failed_book else "✅"
+                entry.append(f"  {mark} 第 {book['position']} 筆｜書名：{book_name}")
                 entry.append(f"    分類號：{line_text(book['classification'])}")
-                if book["reason"]:
+                if book["reason"] and not (book["reason"] == "查無館藏" and book["classification"] == "查無館藏"):
                     entry.append(f"    原因：{line_text(book['reason'])}")
         else:
             entry.append(f"  分類號：{line_text(case['classification'])}")
@@ -214,26 +236,20 @@ def build_messages(runs: list[dict], when: datetime) -> list[str]:
                        "passed": True, "reason": "", "classification": "不適用（封面測試）",
                        "url": SUITES[3][2]})
     failed_suites = [run["name"] for run in runs if run["code"] != 0 or any(not c["passed"] for c in run["cases"])]
-    summary_lines = [
-        "📚 館藏查詢｜測試摘要（1/3）",
+    summary = "\n".join([
+        "📚 館藏查詢｜測試摘要",
         f"時間：{when.astimezone().strftime('%Y-%m-%d %H:%M %Z')}",
-        f"整體：{len(failed_suites)}/{len(runs)} 項未通過",
-        f"資料：{len(failed)} 筆未通過、{passed_count} 筆通過",
-        "",
-        "各項結果",
-    ]
-    for run in runs:
-        failed_count = sum(not case["passed"] for case in run["cases"])
-        status = "❌" if run["code"] != 0 or failed_count else "✅"
-        summary_lines.append(f"{status} {run['name']}｜{failed_count}/{len(run['cases'])} 筆未通過")
-    summary_lines.append("")
-    summary_lines.append("下一則：未通過明細；第三則：通過明細")
-    summary = "\n".join(summary_lines)
+        f"整體：{len(runs)-len(failed_suites)}/{len(runs)} 項通過",
+        "未通過❌:" + (", ".join(failed_suites) if failed_suites else "無"),
+    ])
     return [summary, detail_message(f"❌ 未通過明細（2/3）｜{len(failed)} 筆", failed),
             detail_message(f"✅ 通過明細（3/3）｜{passed_count} 筆", passed)]
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="執行館藏查詢全部測試並發送三則 LINE 回報")
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    parser = argparse.ArgumentParser(description="執行館藏查詢測試並發送三則 LINE 回報")
     options = parser.add_mutually_exclusive_group()
     options.add_argument("--send-test", action="store_true")
     options.add_argument("--no-line", action="store_true")
@@ -241,9 +257,14 @@ def main() -> int:
     parser.add_argument("--seed", type=int)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--max-runtime", type=int, default=1800, help="每項測試上限秒數")
+    parser.add_argument("--headless", action="store_true", help="背景執行 Chrome；預設顯示瀏覽器")
+    parser.add_argument("--only", choices=[suite[0] for suite in SUITES],
+                        help="只執行指定測試並回報 LINE；未指定時執行全部四項")
     args = parser.parse_args()
     if args.timeout < 30 or args.max_runtime < args.timeout:
         parser.error("--timeout 至少 30 秒，--max-runtime 不得小於 --timeout")
+    if args.send_test and args.only:
+        parser.error("--send-test 只測 LINE 連線，不能與 --only 同時使用")
     try:
         credentials = None if args.no_line else load_line_config(args.line_config)
         if args.send_test:
@@ -253,9 +274,10 @@ def main() -> int:
         REPORT_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         runs = []
-        for suite in SUITES:
+        selected_suites = [suite for suite in SUITES if args.only is None or suite[0] == args.only]
+        for suite in selected_suites:
             print(f"正在執行：{suite[0]}...", flush=True)
-            code, cases, log = run_suite(suite, args.seed, args.timeout, args.max_runtime, stamp)
+            code, cases, log = run_suite(suite, args.seed, args.timeout, args.max_runtime, stamp, args.headless)
             runs.append({"name": suite[0], "code": code, "cases": cases})
             print(f"{suite[0]}：{'通過' if code == 0 else '失敗'}；紀錄：{log}", flush=True)
         messages = build_messages(runs, datetime.now().astimezone())

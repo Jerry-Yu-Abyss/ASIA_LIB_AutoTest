@@ -7,7 +7,7 @@
 ## 目前進度（2026-11-03）
 
 - 已完成：可在 Windows 用 `setup.ps1` 建立專案專用環境；「館藏查詢」四項測試均可用無人值守模式執行；`run_and_notify.py` 一次執行四項並分三則 LINE 回報。
-- 已驗證：本機安裝與套件檢查通過、14 項自動化單元測試通過；2026-11-03 已實跑四項館藏查詢測試並發送三則 LINE 回報。當次網路書店推薦通過，其餘三項因網站資料有缺少分類號或預設封面而未通過。
+- 已驗證：本機安裝與套件檢查、自動化單元測試均通過；2026-11-03 已實跑四項館藏查詢測試並發送三則 LINE 回報。當次網路書店推薦通過，其餘三項因網站資料有缺少分類號或預設封面而未通過。
 - 異常處理：Gemini 曾連續 5 次回傳 HTTP 503；現已加入有上限的退避等待，並等待驗證碼圖片實際載入後才截圖。若外部服務持續不可用，仍會回報失敗，不會卡在人工輸入。
 - 尚未完成：預定每週一台灣時間 09:00 的自動排程**尚未建立或啟用**；換到另一台電腦執行也仍需個別安裝與驗證。
 
@@ -71,6 +71,12 @@ py -3 -m venv .venv
 
 ## 執行測試
 
+### 雙擊開啟檢測視窗
+
+完成前述 `setup.ps1` 安裝後，在檔案總管雙擊 [`啟動檢測.pyw`](啟動檢測.pyw)。視窗中可選「全部」或任一項館藏查詢測試，並勾選是否傳送 LINE 結果、是否顯示瀏覽器操作；按「開始檢測」即可在視窗內查看即時進度。也可按「只測 LINE 連線」發送一則連線測試訊息，不執行網站檢測。「停止檢測」會結束正在執行的測試，「開啟報告資料夾」可查看本機日誌與逐筆 JSON 報告。
+
+視窗預設執行時會顯示 Chrome，完成後發送三則 LINE 結果。首次在新電腦使用前，仍須在本機設定測試帳號、Gemini 金鑰與 LINE 憑證。若雙擊 `.pyw` 沒有開啟視窗，請確認 Windows 已將 `.pyw` 檔案關聯至 Python（`pythonw.exe`）。
+
 ### Windows CMD 常用指令
 
 開啟 **命令提示字元（CMD）**，先進入專案資料夾。複製到其他電腦時，將路徑改為新電腦的實際位置：
@@ -91,6 +97,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\setup.ps1"
 .\.venv\Scripts\python.exe .\run_and_notify.py
 ```
 
+執行時預設會顯示 Chrome；需要背景執行時加上 `--headless`：
+
+```cmd
+.\.venv\Scripts\python.exe .\run_and_notify.py --headless
+```
+
+若只想執行其中一項並收到該項的三則 LINE 回報，可加 `--only`：
+
+```cmd
+.\.venv\Scripts\python.exe .\run_and_notify.py --only "關鍵字查詢"
+.\.venv\Scripts\python.exe .\run_and_notify.py --only "中英文查詢"
+.\.venv\Scripts\python.exe .\run_and_notify.py --only "網路書店推薦"
+.\.venv\Scripts\python.exe .\run_and_notify.py --only "新書封面"
+```
+
 只測 LINE 發送，不執行網站測試：
 
 ```cmd
@@ -103,18 +124,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\setup.ps1"
 .\.venv\Scripts\python.exe .\run_and_notify.py --no-line
 ```
 
-單獨執行各項測試（背景 Chrome）：
+單獨執行各項測試（顯示 Chrome）：
 
 ```cmd
-.\.venv\Scripts\python.exe ".\館藏查詢\關鍵字查詢.py" --headless
-.\.venv\Scripts\python.exe ".\館藏查詢\中英查詢.py" --headless
-.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py" --captcha-mode gemini --headless --non-interactive
-.\.venv\Scripts\python.exe ".\館藏查詢\新書報報.py" --headless
+.\.venv\Scripts\python.exe ".\館藏查詢\關鍵字查詢.py"
+.\.venv\Scripts\python.exe ".\館藏查詢\中英查詢.py"
+.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py" --captcha-mode gemini --non-interactive
+.\.venv\Scripts\python.exe ".\館藏查詢\新書報報.py"
 ```
 
 執行全部測試時，每個測試的進度會即時顯示在終端機，並同步保存到 `.local\reports`；逐筆網址也保存在該資料夾的 JSON 報告。上述指令不需要先啟用虛擬環境。
 
-若只要檢查程式本身的 14 項單元測試，可執行下列指令；這不會啟動瀏覽器或發送 LINE：
+若只要檢查程式本身的單元測試，可執行下列指令；這不會啟動瀏覽器或發送 LINE：
 
 ```cmd
 .\.venv\Scripts\python.exe ".\tests\test_run_and_notify.py"
@@ -188,7 +209,7 @@ notepad .\config\line.local.json
 .\.venv\Scripts\python.exe .\run_and_notify.py
 ```
 
-這會依序執行關鍵字查詢、中英文查詢、網路書店推薦及新書封面四項測試，全部以背景 Chrome 執行且不等待鍵盤輸入。「關鍵字查詢」測試會點擊網站列出的熱門關鍵字；「帳號登入.py」是網路書店推薦共用的登入模組，不是獨立測試。網路書店驗證碼最多嘗試 5 張。LINE 一次收到三則：① 四項通過／失敗摘要；② 未通過的資料、原因、書名與分類號；③ 通過的資料、書名與分類號。查無館藏時會明確列出該筆書名。LINE 不附網址；逐筆網址只保存在本機 JSON 報告。新書封面測試通過的書目在第三則合併為通過筆數，未通過的書目仍逐筆列出。推薦按鈕與封面測試沒有抓分類號，會標示「不適用」。完整日誌及 JSON 報告留在本機 `.local/reports/`。若其餘明細超過 LINE 單則 5000 字上限，訊息會註明省略筆數，完整內容仍在本機報告。若只想測網站、不發 LINE，可加 `--no-line`。程式結束碼：`0` 表示四項通過且訊息發送成功，`1` 表示有測試失敗但結果已回報，`2` 表示 LINE 設定或發送失敗。
+這會依序執行關鍵字查詢、中英文查詢、網路書店推薦及新書封面四項測試，預設顯示 Chrome 且不等待鍵盤輸入；加 `--headless` 才會在背景執行。「關鍵字查詢」測試會點擊網站列出的熱門關鍵字；「帳號登入.py」是網路書店推薦共用的登入模組，不是獨立測試。網路書店驗證碼最多嘗試 5 張。LINE 一次收到三則：① 四項通過／失敗摘要；② 未通過的資料、原因、書名與分類號；③ 通過的資料、書名與分類號。查無館藏時會明確列出該筆書名。LINE 不附網址；逐筆網址只保存在本機 JSON 報告。新書封面測試通過的書目在第三則合併為通過筆數，未通過的書目仍逐筆列出。推薦按鈕與封面測試沒有抓分類號，會標示「不適用」。完整日誌及 JSON 報告留在本機 `.local/reports/`。若其餘明細超過 LINE 單則 5000 字上限，訊息會註明省略筆數，完整內容仍在本機報告。若只想測網站、不發 LINE，可加 `--no-line`。程式結束碼：`0` 表示四項通過且訊息發送成功，`1` 表示有測試失敗但結果已回報，`2` 表示 LINE 設定或發送失敗。
 
 ### 新書封面測試
 
@@ -208,6 +229,7 @@ notepad .\config\line.local.json
 ├─ setup.ps1
 ├─ requirements.txt
 ├─ run_and_notify.py
+├─ 啟動檢測.pyw
 ├─ tests/
 │  └─ test_run_and_notify.py
 ├─ config/
@@ -221,6 +243,7 @@ notepad .\config\line.local.json
 │  ├─ 關鍵字查詢.py
 │  ├─ 中英查詢.py
 │  ├─ 帳號登入.py
+│  ├─ 網頁載入.py
 │  ├─ 網路書店推薦.py
 │  └─ 新書報報.py
 └─ 個人化書單分類號抓取/
@@ -243,6 +266,10 @@ notepad .\config\line.local.json
 ### 網站顯示 `Service Unavailable`
 
 館藏查詢首頁連線會每隔 30 秒自動重試，最多 10 次。如果仍無法連線，請稍後再執行，並確認測試網站可由瀏覽器正常開啟。網路書店的驗證碼辨識最多嘗試 5 張；其他登入錯誤與搜尋不會自動重試。
+
+### 網站連線逾時
+
+若網站載入時發生連線逾時，程式會顯示重試進度，最多重新載入 3 次（含首次載入共 4 次）。仍無法連線時，視窗及 LINE 會回報「圖書館網站連線逾時」。請用一般瀏覽器開啟 <https://aulib.asia.edu.tw/webpac/search.cfm>；若瀏覽器也無法開啟，可稍後再試，或以其他網路確認目前網路到大學網站的連線狀況。
 
 ### Gemini 回傳 HTTP 503 或驗證碼辨識不一致
 

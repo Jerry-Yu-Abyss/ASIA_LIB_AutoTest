@@ -18,7 +18,13 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
+
+if __package__:
+    from .網頁載入 import ConnectionTimeout, get_with_retries
+else:
+    from 網頁載入 import ConnectionTimeout, get_with_retries
 
 TARGET_URL = "https://aulib.asia.edu.tw/webpac/search.cfm"
 
@@ -43,7 +49,15 @@ def open_page(headless: bool = False) -> webdriver.Chrome:
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
     print(f"[+] 正在開啟頁面：{TARGET_URL}")
-    driver.get(TARGET_URL)
+    driver.set_page_load_timeout(45)
+    try:
+        get_with_retries(driver, TARGET_URL)
+    except ConnectionTimeout:
+        driver.quit()
+        raise
+    except WebDriverException:
+        driver.quit()
+        raise RuntimeError("無法開啟圖書館網站，請稍後再試或檢查網路") from None
     try:
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -265,6 +279,7 @@ def main(max_retries: int = 10, retry_interval: int = 30):
     """
     parser = argparse.ArgumentParser(description="新書封面檢查")
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--non-interactive", action="store_true", help="完成後直接關閉瀏覽器")
     parser.add_argument("--report-json", type=Path)
     args = parser.parse_args()
     driver = None
@@ -308,7 +323,7 @@ def main(max_retries: int = 10, retry_interval: int = 30):
     except Exception as exc:
         print(f"[FAIL] {str(exc).splitlines()[0] or type(exc).__name__}")
     finally:
-        if not args.headless and driver:
+        if not args.headless and not args.non_interactive and driver:
             input("\n[+] 完成，按 Enter 關閉瀏覽器...")
         if driver:
             driver.quit()
