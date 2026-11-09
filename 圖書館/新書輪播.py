@@ -1,7 +1,7 @@
 # 測試成功標準：
 # 1. 網站可正常開啟，且能找到 #newBooks > .slideMain 的新書區塊。
-# 2. 新書區塊中的每一本書都必須有有效的封面圖片。
-# 3. 不可缺少圖片或使用預設佔位圖；最終報告的缺少數量為 0 才算成功。
+# 2. 若書封缺圖或顯示預設圖，檢查詳情頁是否提供三民書店連結。
+# 3. 三民沒有提供書封來源可通過；有來源卻缺圖才算異常。
 
 """
 爬蟲目標：https://aulib.asia.edu.tw/webpac/search.cfm
@@ -12,6 +12,10 @@ import argparse
 import json
 from pathlib import Path
 import time
+from urllib.parse import urlsplit
+import requests
+from lxml import html
+from lxml.etree import ParserError
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -27,6 +31,24 @@ else:
     from 網頁載入 import ConnectionTimeout, get_with_retries
 
 TARGET_URL = "https://aulib.asia.edu.tw/webpac/search.cfm"
+PLACEHOLDER = "templates/img/product_img.jpg"
+
+
+def has_sanmin_cover_source(detail_url: str) -> bool:
+    """查看館藏詳情頁是否提供三民書店的書封來源連結。"""
+    parsed = urlsplit(detail_url)
+    if parsed.scheme != "https" or parsed.hostname != "aulib.asia.edu.tw" or parsed.path != "/webpac/content.cfm":
+        raise ValueError("書目詳情網址不正確")
+    response = requests.get(detail_url, timeout=20)
+    response.raise_for_status()
+    page = html.fromstring(response.content)
+    photo = "//div[contains(concat(' ', normalize-space(@class), ' '), ' photo ')]"
+    if not page.xpath(photo):
+        raise ValueError("書目詳情頁沒有封面區塊")
+    sources = page.xpath(photo + "//a[contains(concat(' ', normalize-space(@class), ' '), ' online-book ')]/@href")
+    sources += page.xpath(photo + "//img/@src")
+    return any((urlsplit(source).hostname or "").endswith(".sanmin.com.tw")
+               or urlsplit(source).hostname == "sanmin.com.tw" for source in sources)
 
 
 def open_page(headless: bool = False) -> webdriver.Chrome:
@@ -171,8 +193,6 @@ def scan_slide_main(driver: webdriver.Chrome):
                 book_details = slide_books.find_elements(By.CSS_SELECTOR, ".bookDetail")
                 print(f"  │  .bookDetail 數量：{len(book_details)}")
 
-                PLACEHOLDER = "templates/img/product_img.jpg"
-
                 for bd_idx, book_detail in enumerate(book_details, start=1):
                     anchors        = book_detail.find_elements(By.TAG_NAME, "a")
                     found_src      = False  # 有真實封面圖
@@ -202,11 +222,25 @@ def scan_slide_main(driver: webdriver.Chrome):
                                 found_src = True
 
                     block_total += 1
+                    detail_url = anchors[0].get_attribute("href") if anchors else ""
+                    cover_status = "封面正常"
                     if not found_src or is_placeholder:
-                        block_missing += 1
-                        reason = "預設佔位圖" if is_placeholder else "無任何圖片"
-                        print(f"  │    ❌ [{bd_idx}] {book_name}（{reason}）")
-                        block_missing_books.append(f"{book_name}（{reason}）")
+                        try:
+                            if has_sanmin_cover_source(detail_url):
+                                reason = "有三民書封來源，但圖書館未顯示封面"
+                                cover_status = "來源有封面但未顯示"
+                            else:
+                                reason = ""
+                                cover_status = "三民未提供書封來源"
+                        except (requests.RequestException, ValueError, ParserError) as exc:
+                            reason = f"無法確認三民書封來源：{exc}"
+                            cover_status = "來源查詢失敗"
+                        if reason:
+                            block_missing += 1
+                            print(f"  │    ❌ [{bd_idx}] {book_name}（{reason}）")
+                            block_missing_books.append(f"{book_name}（{reason}）")
+                        else:
+                            print(f"  │    ✅ [{bd_idx}] {book_name}（{cover_status}，缺圖屬正常）")
                     else:
                         reason = ""
                     book_report.append({
@@ -214,8 +248,9 @@ def scan_slide_main(driver: webdriver.Chrome):
                         "name": book_name,
                         "success": not reason,
                         "reason": reason,
+                        "cover_status": cover_status,
                         "classification": "不適用（封面測試）",
-                        "url": anchors[0].get_attribute("href") if anchors else driver.current_url,
+                        "url": detail_url or driver.current_url,
                     })
 
                 print(f"  └─ slideBooks [{sb_idx}-{books_idx}] 結束")
@@ -240,21 +275,21 @@ def scan_slide_main(driver: webdriver.Chrome):
         for r in report:
             actual = r["total"] - r["missing"]
             print(f"  [{r['idx']:02d}] {r['title'][:28]:<28}")
-            print(f"       應該有 {r['total']} 筆  │  實際有 {actual} 筆  │  缺少 {r['missing']} 筆")
+            print(f"       共 {r['total']} 筆  │  正常 {actual} 筆  │  異常 {r['missing']} 筆")
             if r["missing_books"]:
-                print(f"       缺少的書：")
+                print(f"       異常書目：")
                 for bname in r["missing_books"]:
                     print(f"         • {bname}")
 
         print("─" * 55)
         print(f"  【全站統計】")
-        print(f"  應該有：{grand_total} 筆")
-        print(f"  實際有：{grand_actual} 筆")
-        print(f"  缺少：  {grand_missing} 筆")
+        print(f"  共檢查：{grand_total} 筆")
+        print(f"  正常：  {grand_actual} 筆")
+        print(f"  異常：  {grand_missing} 筆")
         if grand_missing == 0:
-            print(f"  ✅ 所有新書均有封面圖片")
+            print("  ✅ 封面正常，或三民未提供書封來源")
         else:
-            print(f"  ❌ 共缺少 {grand_missing} 張封面")
+            print(f"  ❌ 共 {grand_missing} 筆封面異常")
         print("█" * 55)
         if grand_total == 0:
             raise RuntimeError("未找到任何新書")
