@@ -1,4 +1,4 @@
-"""雙擊開啟館藏查詢檢測視窗。"""
+"""雙擊開啟圖書館檢測視窗。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 RUNNER = ROOT / "run_and_notify.py"
 REPORT_DIR = ROOT / ".local" / "reports"
-SUITES = ("全部", "關鍵字查詢", "中英文查詢", "網路書店推薦", "新書封面")
+SUITES = ("全部", "關鍵字查詢", "館藏查詢", "網路書店推薦", "新書輪播")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -37,7 +37,7 @@ def build_command(suite: str, send_line: bool, show_browser: bool, line_test: bo
 class TestWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title("亞洲大學圖書館｜館藏查詢檢測")
+        self.root.title("亞洲大學圖書館｜圖書館檢測")
         self.root.geometry("860x620")
         self.root.minsize(680, 460)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -48,7 +48,7 @@ class TestWindow:
 
         frame = ttk.Frame(self.root, padding=16)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="館藏查詢自動檢測", font=("Microsoft JhengHei UI", 18, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="圖書館自動檢測", font=("Microsoft JhengHei UI", 18, "bold")).pack(anchor="w")
         ttk.Label(frame, text="選擇檢測項目後按「開始檢測」；進度會顯示在下方。").pack(anchor="w", pady=(4, 16))
 
         choices = ttk.Frame(frame)

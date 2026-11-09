@@ -84,5 +84,5 @@ if (@($chromePaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).
 }
 
 Write-Host '環境安裝完成。可執行：'
-Write-Host '.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py"'
+Write-Host '.\.venv\Scripts\python.exe ".\圖書館\網路書店推薦.py"'
 Write-Host '首次執行時 ChromeDriver 可能需要連網下載。'

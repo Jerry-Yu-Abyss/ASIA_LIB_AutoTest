@@ -1,4 +1,4 @@
-"""執行館藏查詢的四項測試，分三則回報個人 LINE。"""
+"""執行圖書館的四項測試，分三則回報個人 LINE。"""
 from __future__ import annotations
 
 import argparse
@@ -22,9 +22,9 @@ USER_ID_PATTERN = re.compile(r"U[0-9a-f]{32}")
 LIMIT = 5000
 SUITES = (
     ("關鍵字查詢", "關鍵字查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
-    ("中英文查詢", "中英查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
+    ("館藏查詢", "館藏查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
     ("網路書店推薦", "網路書店推薦.py", "https://aulib.asia.edu.tw/webpac/recommend_book.cfm"),
-    ("新書封面", "新書報報.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
+    ("新書輪播", "新書輪播.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
 )
 
 def load_line_config(path: Path = LINE_CONFIG) -> tuple[str, str]:
@@ -85,7 +85,7 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
         if name == "關鍵字查詢":
             label, passed = item.get("keyword", "未知關鍵字"), bool(item.get("success"))
             reason, books = item.get("reason", ""), item.get("books", {})
-        elif name == "中英文查詢":
+        elif name == "館藏查詢":
             label = f"{item.get('language', '')} {item.get('word', '')}"
             reason, books = "；".join(item.get("errors") or []), item.get("books", {})
             passed = not reason and all(
@@ -100,7 +100,7 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
             reason, books, passed = item.get("reason", ""), [], bool(item.get("success"))
         case = {"suite": name, "name": short(label, 65), "passed": passed,
                 "reason": short(reason, 120), "url": safe_url(item.get("url"), fallback)}
-        if name == "新書封面":
+        if name == "新書輪播":
             case["classification"] = "不適用（封面測試）"
         else:
             case["books"] = []
@@ -124,13 +124,13 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
     stem = f"{stamp}_{Path(script).stem}"
     report = REPORT_DIR / f"{stem}.json"
     log = REPORT_DIR / f"{stem}.log"
-    cmd = [sys.executable, "-u", str(ROOT / "館藏查詢" / script),
+    cmd = [sys.executable, "-u", str(ROOT / "圖書館" / script),
            "--report-json", str(report), "--non-interactive"]
     if headless:
         cmd.append("--headless")
     if script == "網路書店推薦.py":
         cmd += ["--captcha-mode", "gemini", "--timeout", str(timeout)]
-    if seed is not None and script in ("中英查詢.py", "網路書店推薦.py"):
+    if seed is not None and script in ("館藏查詢.py", "網路書店推薦.py"):
         cmd += ["--seed", str(seed)]
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -229,15 +229,15 @@ def build_messages(runs: list[dict], when: datetime) -> list[str]:
     failed = [case for case in cases if not case["passed"]]
     passed = [case for case in cases if case["passed"]]
     passed_count = len(passed)
-    new_book_passed = [case for case in passed if case["suite"] == "新書封面"]
+    new_book_passed = [case for case in passed if case["suite"] == "新書輪播"]
     if new_book_passed:
-        passed = [case for case in passed if case["suite"] != "新書封面"]
-        passed.append({"suite": "新書封面", "name": f"{len(new_book_passed)} 筆封面正常（逐筆資料見本機 JSON）",
+        passed = [case for case in passed if case["suite"] != "新書輪播"]
+        passed.append({"suite": "新書輪播", "name": f"{len(new_book_passed)} 筆封面正常（逐筆資料見本機 JSON）",
                        "passed": True, "reason": "", "classification": "不適用（封面測試）",
                        "url": SUITES[3][2]})
     failed_suites = [run["name"] for run in runs if run["code"] != 0 or any(not c["passed"] for c in run["cases"])]
     summary = "\n".join([
-        "📚 館藏查詢｜測試摘要",
+        "📚 圖書館｜測試摘要",
         f"時間：{when.astimezone().strftime('%Y-%m-%d %H:%M %Z')}",
         f"整體：{len(runs)-len(failed_suites)}/{len(runs)} 項通過",
         "未通過❌:" + (", ".join(failed_suites) if failed_suites else "無"),
@@ -249,7 +249,7 @@ def main() -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
-    parser = argparse.ArgumentParser(description="執行館藏查詢測試並發送三則 LINE 回報")
+    parser = argparse.ArgumentParser(description="執行圖書館測試並發送三則 LINE 回報")
     options = parser.add_mutually_exclusive_group()
     options.add_argument("--send-test", action="store_true")
     options.add_argument("--no-line", action="store_true")

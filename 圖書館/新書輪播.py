@@ -277,7 +277,7 @@ def main(max_retries: int = 10, retry_interval: int = 30):
     若遇到 Service Unavailable，每隔 retry_interval 秒自動重試，
     最多重試 max_retries 次。
     """
-    parser = argparse.ArgumentParser(description="新書封面檢查")
+    parser = argparse.ArgumentParser(description="新書輪播檢查")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--non-interactive", action="store_true", help="完成後直接關閉瀏覽器")
     parser.add_argument("--report-json", type=Path)

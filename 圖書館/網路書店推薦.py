@@ -17,7 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from 中英查詢 import CHINESE_WORDS, ENGLISH_WORDS
+from 館藏查詢 import CHINESE_WORDS, ENGLISH_WORDS
 from 關鍵字查詢 import REQUIRED_POSITIONS, open_page
 from 網頁載入 import get_with_retries
 

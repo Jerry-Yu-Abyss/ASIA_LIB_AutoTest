@@ -150,7 +150,7 @@ def print_report(results: list[dict]) -> bool:
         )
 
     print("\n" + "=" * 55)
-    print("  中英文查詢測試報告")
+    print("  館藏查詢測試報告")
     print("=" * 55)
     for result in results:
         status = "PASS" if passed(result) else "FAIL"

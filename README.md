@@ -13,11 +13,11 @@
 
 ## 測試項目
 
-- `館藏查詢/關鍵字查詢.py`：點擊每個熱門關鍵字，再點開第 1、5、10 筆書目；三筆都取得「索書號(卷期)」中的分類號才算成功。找不到分類號時顯示「查無館藏」。
-- `館藏查詢/中英查詢.py`：中文、英文各從 10 個常見詞抽 1 個搜尋，再點開各自第 1、5、10 筆書目；六筆都取得分類號才算成功。
-- `館藏查詢/網路書店推薦.py`：登入後，中英文各抽 1 個詞搜尋網路書店，點開各自第 1、5、10 筆書目；六筆的「推薦」按鈕都載入才算成功。只檢查，不點推薦、不送出資料。
-- `館藏查詢/帳號登入.py`：獨立的測試帳號登入模組，只有需要登入的測試才會匯入；一般查詢不會讀取帳號設定。
-- `館藏查詢/新書報報.py`：檢查新書是否都有封面。沒有缺圖或預設圖片就是成功。
+- `圖書館/關鍵字查詢.py`：點擊每個熱門關鍵字，再點開第 1、5、10 筆書目；三筆都取得「索書號(卷期)」中的分類號才算成功。找不到分類號時顯示「查無館藏」。
+- `圖書館/館藏查詢.py`：中文、英文各從 10 個常見詞抽 1 個搜尋，再點開各自第 1、5、10 筆書目；六筆都取得分類號才算成功。
+- `圖書館/網路書店推薦.py`：登入後，中英文各抽 1 個詞搜尋網路書店，點開各自第 1、5、10 筆書目；六筆的「推薦」按鈕都載入才算成功。只檢查，不點推薦、不送出資料。
+- `圖書館/帳號登入.py`：獨立的測試帳號登入模組，只有需要登入的測試才會匯入；一般查詢不會讀取帳號設定。
+- `圖書館/新書輪播.py`：檢查新書是否都有封面。沒有缺圖或預設圖片就是成功。
 - `個人化書單分類號抓取/抓取分類號.py`：抓取個人化書單各書目的「索書號(卷期)」分類號，填入依日期命名的 Excel。用法見[專用說明](個人化書單分類號抓取/README.md)。
 
 ## 環境需求
@@ -57,7 +57,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 安裝後直接用專案內的 Python 執行測試，不需啟用虛擬環境：
 
 ```powershell
-.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py"
+.\.venv\Scripts\python.exe ".\圖書館\網路書店推薦.py"
 ```
 
 初次執行時，`webdriver-manager` 會下載與 Chrome 相容的 ChromeDriver，因此仍需網路。若在新電腦找不到 Python 或 Chrome，請先安裝它們並重新開啟 PowerShell，再執行 `setup.ps1`。複製檔案時若不小心包含舊電腦的 `.venv`，請先移走該資料夾後再安裝。
@@ -107,9 +107,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\setup.ps1"
 
 ```cmd
 .\.venv\Scripts\python.exe .\run_and_notify.py --only "關鍵字查詢"
-.\.venv\Scripts\python.exe .\run_and_notify.py --only "中英文查詢"
+.\.venv\Scripts\python.exe .\run_and_notify.py --only "館藏查詢"
 .\.venv\Scripts\python.exe .\run_and_notify.py --only "網路書店推薦"
-.\.venv\Scripts\python.exe .\run_and_notify.py --only "新書封面"
+.\.venv\Scripts\python.exe .\run_and_notify.py --only "新書輪播"
 ```
 
 只測 LINE 發送，不執行網站測試：
@@ -127,10 +127,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\setup.ps1"
 單獨執行各項測試（顯示 Chrome）：
 
 ```cmd
-.\.venv\Scripts\python.exe ".\館藏查詢\關鍵字查詢.py"
-.\.venv\Scripts\python.exe ".\館藏查詢\中英查詢.py"
-.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py" --captcha-mode gemini --non-interactive
-.\.venv\Scripts\python.exe ".\館藏查詢\新書報報.py"
+.\.venv\Scripts\python.exe ".\圖書館\關鍵字查詢.py"
+.\.venv\Scripts\python.exe ".\圖書館\館藏查詢.py"
+.\.venv\Scripts\python.exe ".\圖書館\網路書店推薦.py" --captcha-mode gemini --non-interactive
+.\.venv\Scripts\python.exe ".\圖書館\新書輪播.py"
 ```
 
 執行全部測試時，每個測試的進度會即時顯示在終端機，並同步保存到 `.local\reports`；逐筆網址也保存在該資料夾的 JSON 報告。上述指令不需要先啟用虛擬環境。
@@ -148,13 +148,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\setup.ps1"
 關鍵字查詢測試（檢查網站列出的熱門關鍵字）：
 
 ```powershell
-.\.venv\Scripts\python.exe ".\館藏查詢\關鍵字查詢.py"
+.\.venv\Scripts\python.exe ".\圖書館\關鍵字查詢.py"
 ```
 
 中英文隨機查詢測試：
 
 ```powershell
-.\.venv\Scripts\python.exe ".\館藏查詢\中英查詢.py"
+.\.venv\Scripts\python.exe ".\圖書館\館藏查詢.py"
 ```
 
 加上 `--seed 123` 可重現相同的抽詞結果；加上 `--headless` 可在背景執行 Chrome。
@@ -172,7 +172,7 @@ if (-not (Test-Path ".\config\測試帳號.local.json")) {
 在 `config/測試帳號.local.json` 填入 `username` 和 `password`。範例檔的 `captcha.mode` 是 `manual`；若要自動辨識，改成 `gemini`，並填入自己的 `gemini_api_key` 與可用的 `gemini_model`（例如本專案測試過的 `gemini-3.5-flash-lite`）。金鑰也可改用環境變數 `GEMINI_API_KEY` 提供。接著直接執行 Python 檔：
 
 ```powershell
-.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py"
+.\.venv\Scripts\python.exe ".\圖書館\網路書店推薦.py"
 ```
 
 程式依本機設定的 `captcha.mode` 選擇驗證碼模式；也可用 `--captcha-mode manual` 或 `--captcha-mode gemini` 暫時覆寫。手動模式會將圖片存至 `.local/captcha.png`，並在終端機等待輸入。帳密以明文保存在本機 JSON，請勿分享；`*.local.json` 與 `.local/` 已排除於 Git，不會上傳。
@@ -180,12 +180,12 @@ if (-not (Test-Path ".\config\測試帳號.local.json")) {
 自動辨識採用[參考文章](https://www.dcard.tw/@myidis__/post/259963369)的 Gemini 圖片辨識方式。若只想在這次執行改用 Gemini，或要在背景開啟 Chrome，可加參數：
 
 ```powershell
-.\.venv\Scripts\python.exe ".\館藏查詢\網路書店推薦.py" --captcha-mode gemini --headless
+.\.venv\Scripts\python.exe ".\圖書館\網路書店推薦.py" --captcha-mode gemini --headless
 ```
 
 只會將驗證碼圖片傳給 Google Gemini，不傳帳密。程式會比對兩個模型對同一張圖片的結果；若辨識失敗（例如 HTTP 503）、結果不同，或網站判定驗證碼錯誤，便更換驗證碼再試，最多使用 5 張。暫時性 Gemini 錯誤會逐次延長等待時間，再更換驗證碼。程式也會等待圖片載入且尺寸非零後才截圖。第 5 張仍無法辨識時，會將圖片存至 `.local/captcha.png` 並等待手動輸入；若網站拒絕第 5 張，程式會結束並顯示錯誤。手動模式不會自動重試。`captcha.gemini_model` 留空時使用 `gemini-flash-latest`；API 呼叫可能產生費用。
 
-中文與英文各有 10 個常見詞，和中英查詢共用詞庫。可加 `--seed 123` 固定抽詞、`--timeout 240` 延長查詢等待秒數（預設 180）。結果不足 10 筆或任何推薦按鈕未載入，都會列為失敗；結束時輸出包含書名的簡易報告並自動關閉瀏覽器，成功回傳 0、失敗回傳 1。
+中文與英文各有 10 個常見詞，和館藏查詢共用詞庫。可加 `--seed 123` 固定抽詞、`--timeout 240` 延長查詢等待秒數（預設 180）。結果不足 10 筆或任何推薦按鈕未載入，都會列為失敗；結束時輸出包含書名的簡易報告並自動關閉瀏覽器，成功回傳 0、失敗回傳 1。
 
 ### 本機 LINE 回報測試
 
@@ -209,14 +209,14 @@ notepad .\config\line.local.json
 .\.venv\Scripts\python.exe .\run_and_notify.py
 ```
 
-這會依序執行關鍵字查詢、中英文查詢、網路書店推薦及新書封面四項測試，預設顯示 Chrome 且不等待鍵盤輸入；加 `--headless` 才會在背景執行。「關鍵字查詢」測試會點擊網站列出的熱門關鍵字；「帳號登入.py」是網路書店推薦共用的登入模組，不是獨立測試。網路書店驗證碼最多嘗試 5 張。LINE 一次收到三則：① 四項通過／失敗摘要；② 未通過的資料、原因、書名與分類號；③ 通過的資料、書名與分類號。查無館藏時會明確列出該筆書名。LINE 不附網址；逐筆網址只保存在本機 JSON 報告。新書封面測試通過的書目在第三則合併為通過筆數，未通過的書目仍逐筆列出。推薦按鈕與封面測試沒有抓分類號，會標示「不適用」。完整日誌及 JSON 報告留在本機 `.local/reports/`。若其餘明細超過 LINE 單則 5000 字上限，訊息會註明省略筆數，完整內容仍在本機報告。若只想測網站、不發 LINE，可加 `--no-line`。程式結束碼：`0` 表示四項通過且訊息發送成功，`1` 表示有測試失敗但結果已回報，`2` 表示 LINE 設定或發送失敗。
+這會依序執行關鍵字查詢、館藏查詢、網路書店推薦及新書輪播四項測試，預設顯示 Chrome 且不等待鍵盤輸入；加 `--headless` 才會在背景執行。「關鍵字查詢」測試會點擊網站列出的熱門關鍵字；「帳號登入.py」是網路書店推薦共用的登入模組，不是獨立測試。網路書店驗證碼最多嘗試 5 張。LINE 一次收到三則：① 四項通過／失敗摘要；② 未通過的資料、原因、書名與分類號；③ 通過的資料、書名與分類號。查無館藏時會明確列出該筆書名。LINE 不附網址；逐筆網址只保存在本機 JSON 報告。新書輪播測試通過的書目在第三則合併為通過筆數，未通過的書目仍逐筆列出。推薦按鈕與封面測試沒有抓分類號，會標示「不適用」。完整日誌及 JSON 報告留在本機 `.local/reports/`。若其餘明細超過 LINE 單則 5000 字上限，訊息會註明省略筆數，完整內容仍在本機報告。若只想測網站、不發 LINE，可加 `--no-line`。程式結束碼：`0` 表示四項通過且訊息發送成功，`1` 表示有測試失敗但結果已回報，`2` 表示 LINE 設定或發送失敗。
 
-### 新書封面測試
+### 新書輪播測試
 
-新書封面檢查：
+新書輪播檢查：
 
 ```powershell
-.\.venv\Scripts\python.exe ".\館藏查詢\新書報報.py"
+.\.venv\Scripts\python.exe ".\圖書館\新書輪播.py"
 ```
 
 程式會開啟 Chrome、等待頁面載入並在終端機輸出測試報告。手動模式結束後依畫面提示按 Enter 關閉；加 `--headless` 則不等待輸入。
@@ -239,13 +239,13 @@ notepad .\config\line.local.json
 │  └─ line.local.json（僅本機，不上傳）
 ├─ 安裝套件/
 │  └─ set.txt（舊版簡易安裝指令）
-├─ 館藏查詢/
+├─ 圖書館/
 │  ├─ 關鍵字查詢.py
-│  ├─ 中英查詢.py
+│  ├─ 館藏查詢.py
 │  ├─ 帳號登入.py
 │  ├─ 網頁載入.py
 │  ├─ 網路書店推薦.py
-│  └─ 新書報報.py
+│  └─ 新書輪播.py
 └─ 個人化書單分類號抓取/
    ├─ README.md
    ├─ 抓取分類號.py
