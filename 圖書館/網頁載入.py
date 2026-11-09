@@ -1,9 +1,11 @@
-"""圖書館頁面遇到連線逾時時，最多重新載入三次。"""
+"""圖書館頁面連線逾時時，短暫等待後只重載一次。"""
 
+import time
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
-MAX_RELOADS = 3
+MAX_RELOADS = 1
+RETRY_DELAY = 3
 
 
 class ConnectionTimeout(RuntimeError):
@@ -25,3 +27,4 @@ def get_with_retries(driver, url: str, max_reloads: int = MAX_RELOADS) -> None:
                     f"圖書館網站連線逾時，已重新載入 {max_reloads} 次仍無法連線"
                 ) from None
             print(f"[!] 圖書館網站連線逾時，重新載入 {reload_count + 1}/{max_reloads}...", flush=True)
+            time.sleep(RETRY_DELAY)

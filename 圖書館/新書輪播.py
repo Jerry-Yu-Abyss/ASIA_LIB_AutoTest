@@ -249,7 +249,6 @@ def scan_slide_main(driver: webdriver.Chrome):
                         "success": not reason,
                         "reason": reason,
                         "cover_status": cover_status,
-                        "classification": "不適用（封面測試）",
                         "url": detail_url or driver.current_url,
                     })
 
@@ -306,7 +305,7 @@ def is_service_unavailable(driver: webdriver.Chrome) -> bool:
     return "Service Unavailable" in driver.page_source
 
 
-def main(max_retries: int = 10, retry_interval: int = 30):
+def main(max_retries: int = 3, retry_interval: int = 10):
     """
     開啟頁面並執行掃描。
     若遇到 Service Unavailable，每隔 retry_interval 秒自動重試，

@@ -19,16 +19,19 @@ SUITES = ("全部", "關鍵字查詢", "館藏查詢", "網路書店推薦", "�
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def build_command(suite: str, send_line: bool, show_browser: bool, line_test: bool = False) -> list[str]:
+def build_command(suite: str, send_line: bool, show_browser: bool, line_test: bool = False,
+                  broadcast: bool = False) -> list[str]:
     command = [str(PYTHON), "-u", str(RUNNER)]
     if line_test:
-        return command + ["--send-test"]
+        return command + ["--send-test"] + (["--broadcast"] if broadcast else [])
     if suite not in SUITES:
         raise ValueError("未知的測試項目")
     if suite != "全部":
         command += ["--only", suite]
     if not send_line:
         command.append("--no-line")
+    elif broadcast:
+        command.append("--broadcast")
     if not show_browser:
         command.append("--headless")
     return command
@@ -59,8 +62,11 @@ class TestWindow:
         self.suite_box.pack(side="left")
 
         self.send_line = tk.BooleanVar(value=True)
+        self.broadcast = tk.BooleanVar(value=False)
         self.show_browser = tk.BooleanVar(value=True)
         ttk.Checkbutton(frame, text="完成後傳送 LINE 結果", variable=self.send_line).pack(anchor="w", pady=(14, 0))
+        ttk.Checkbutton(frame, text="傳送給所有官方帳號好友（群發會使用訊息額度）",
+                        variable=self.broadcast).pack(anchor="w", pady=(4, 0))
         ttk.Checkbutton(frame, text="顯示瀏覽器操作", variable=self.show_browser).pack(anchor="w", pady=(4, 14))
 
         buttons = ttk.Frame(frame)
@@ -95,7 +101,8 @@ class TestWindow:
         if not RUNNER.is_file():
             messagebox.showerror("找不到檢測程式", f"找不到 {RUNNER.name}")
             return
-        command = build_command(self.suite.get(), self.send_line.get(), self.show_browser.get(), line_test)
+        command = build_command(self.suite.get(), self.send_line.get(), self.show_browser.get(),
+                                line_test, self.broadcast.get())
         self.running = True
         self.stop_requested = False
         self.start_button.configure(state="disabled")

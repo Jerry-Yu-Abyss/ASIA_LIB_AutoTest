@@ -33,7 +33,7 @@ def clean_text(text: str) -> str:
 
 
 def check_book(driver, position: int) -> dict:
-    book = {"position": position, "name": "（未取得）", "loaded": False, "reason": "", "url": "", "classification": "不適用（推薦按鈕測試）"}
+    book = {"position": position, "name": "（未取得）", "loaded": False, "reason": "", "url": ""}
     links = driver.find_elements(By.CSS_SELECTOR, BOOK_LINKS)
     if len(links) < position:
         book["reason"] = "搜尋結果不足，該筆不存在"

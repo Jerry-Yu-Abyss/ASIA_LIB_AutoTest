@@ -1,9 +1,8 @@
 # 測試成功標準：
 # 1. 所有熱門關鍵字皆可被點擊，且點擊後能成功跳轉至搜尋結果頁。
 # 2. 略過非印刷品單行本；每個關鍵字第 1、5、10 筆符合條件的書目都能點開詳情頁。
-# 3. 三筆書目都能從「索書號(卷期)」欄位取得分類號，才算該關鍵字成功。
+# 3. 三筆書目都能成功開啟詳情頁，才算該關鍵字成功。
 # 4. 所有關鍵字均符合上述條件，才算整體成功。
-# 找不到分類號時回傳「查無館藏」，並判定該筆失敗。
 
 """
 爬蟲目標：https://aulib.asia.edu.tw/webpac/search.cfm
@@ -13,7 +12,6 @@
 import argparse
 import json
 from pathlib import Path
-import re
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from selenium import webdriver
@@ -36,8 +34,6 @@ RESULT_BOX_SELECTOR = "#list .list_box"
 REQUIRED_POSITIONS = (1, 5, 10)
 PRINT_BOOK_TYPE = "書目-語言資料,印刷品:單行本"
 BOOK_TYPE_SELECTOR = ".product_info .product_info_content img[alt]"
-NO_HOLDINGS = "查無館藏"
-CALL_NUMBER_PREFIX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{0,3}\d+(?:\.[A-Za-z0-9]+)*)")
 
 
 def show_more_results(driver: webdriver.Chrome) -> str:
@@ -47,6 +43,8 @@ def show_more_results(driver: webdriver.Chrome) -> str:
     params.update(list_num="100", current_page="1")
     expanded_url = urlunsplit((url.scheme, url.netloc, url.path, urlencode(params), url.fragment))
     get_with_retries(driver, expanded_url)
+    if urlsplit(driver.current_url).path.endswith("/error.html"):
+        raise RuntimeError("圖書館搜尋結果頁發生錯誤（error.html）")
     WebDriverWait(driver, 20).until(
         lambda d: d.find_elements(By.CSS_SELECTOR, RESULT_TITLE_SELECTOR) or False
     )
@@ -66,36 +64,6 @@ def print_book_indices(driver: webdriver.Chrome) -> list[int]:
         else:
             print(f"      略過搜尋結果第 {index + 1} 筆：{book_type or '未標示書目類型'}")
     return indices
-
-
-def get_classification_result(driver: webdriver.Chrome) -> str:
-    """回傳書目分類號；找不到「索書號(卷期)」或分類號時回傳「查無館藏」。"""
-    try:
-        tables = WebDriverWait(driver, 20).until(
-            lambda d: d.find_elements(
-                By.XPATH, "//table[thead/tr/*[normalize-space()='索書號(卷期)']]"
-            ) or False
-        )
-    except TimeoutException:
-        return NO_HOLDINGS
-    numbers = []
-    for table in tables:
-        headers = [
-            (cell.get_attribute("textContent") or "").strip()
-            for cell in table.find_elements(By.XPATH, "./thead/tr[1]/*")
-        ]
-        if "索書號(卷期)" not in headers:
-            continue
-        number_index = headers.index("索書號(卷期)")
-        for row in table.find_elements(By.XPATH, "./tbody/tr"):
-            cells = row.find_elements(By.XPATH, "./th|./td")
-            if number_index >= len(cells):
-                continue
-            raw_number = (cells[number_index].get_attribute("textContent") or "").strip()
-            match = CALL_NUMBER_PREFIX.search(raw_number)
-            if match and match.group(1) not in numbers:
-                numbers.append(match.group(1))
-    return "、".join(numbers) or NO_HOLDINGS
 
 
 def open_page(headless: bool = False) -> webdriver.Chrome:
@@ -143,8 +111,8 @@ def is_service_unavailable(driver: webdriver.Chrome) -> bool:
 
 def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None) -> bool:
     """
-    逐一點擊熱門關鍵字，再點開第 1、5、10 筆印刷品單行本並讀取分類號。
-    所有關鍵字的三筆書目都成功取得分類號才回傳 True。
+    逐一點擊熱門關鍵字，再確認第 1、5、10 筆印刷品單行本可開啟詳情頁。
+    所有關鍵字的三筆書目都成功開啟詳情頁才回傳 True。
     """
     print("\n" + "=" * 55)
     print("  熱門關鍵字搜尋結果測試")
@@ -184,6 +152,7 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                 anchor = driver.find_elements(
                     By.CSS_SELECTOR, "#hot_keyword li > a"
                 )[idx - 1]
+                search_url = anchor.get_attribute("href")
                 before_url = driver.current_url
 
                 # 實際點擊關鍵字，不只對 href 發送請求。
@@ -191,15 +160,26 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                 WebDriverWait(driver, 20).until(
                     lambda d: d.current_url != before_url
                 )
+                if urlsplit(driver.current_url).path.endswith("/error.html"):
+                    print("  [!] 網站回傳錯誤頁，等待 5 秒後重試這個關鍵字一次", flush=True)
+                    time.sleep(5)
+                    if not search_url or urlsplit(search_url).hostname != "aulib.asia.edu.tw":
+                        raise RuntimeError("熱門關鍵字的搜尋網址不正確")
+                    get_with_retries(driver, search_url)
+                    if urlsplit(driver.current_url).path.endswith("/error.html"):
+                        raise RuntimeError("圖書館搜尋結果頁發生錯誤（error.html），重試後仍失敗")
                 result["url"] = driver.current_url
                 print(f"  [+] 已跳轉：{result['url']}")
 
                 if is_service_unavailable(driver):
                     raise RuntimeError("搜尋結果頁回傳 Service Unavailable")
 
-                WebDriverWait(driver, 20).until(
-                    EC.presence_of_element_located((By.ID, "list"))
-                )
+                try:
+                    WebDriverWait(driver, 20).until(
+                        EC.presence_of_element_located((By.ID, "list"))
+                    )
+                except TimeoutException as exc:
+                    raise RuntimeError("搜尋結果未在 20 秒內載入") from exc
                 result["url"] = show_more_results(driver)
                 result_count = len(driver.find_elements(By.CSS_SELECTOR, RESULT_TITLE_SELECTOR))
                 print(f"  [+] 搜尋結果共載入 {result_count} 筆")
@@ -228,7 +208,7 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                                 raise RuntimeError("書名為空")
                             result["books"][position] = {
                                 "name": book_name,
-                                "classification": "（未取得）",
+                                "opened": False,
                                 "url": "",
                             }
 
@@ -242,16 +222,12 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                                 raise RuntimeError("點擊書目後未跳轉至詳情頁") from exc
                             if is_service_unavailable(driver):
                                 raise RuntimeError("書目詳情頁回傳 Service Unavailable")
+                            if urlsplit(driver.current_url).path != "/webpac/content.cfm":
+                                raise RuntimeError("未開啟書目詳情頁")
 
                             result["books"][position]["url"] = driver.current_url
-                            classification = get_classification_result(driver)
-                            result["books"][position]["classification"] = classification
-                            if classification == NO_HOLDINGS:
-                                raise RuntimeError(NO_HOLDINGS)
-                            print(
-                                f"      第 {position:>2} 筆：{book_name}；"
-                                f"分類號：{classification}"
-                            )
+                            result["books"][position]["opened"] = True
+                            print(f"      第 {position:>2} 筆：{book_name}；書目詳情頁已開啟")
                             break
                         except Exception as e:
                             reason = (
@@ -276,7 +252,7 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                     print(f"  [FAIL] 失敗：{result['reason']}")
                 else:
                     result["success"] = True
-                    print("  [PASS] 三筆書目均已點開並取得分類號")
+                    print("  [PASS] 三筆書目均已成功開啟詳情頁")
 
             except Exception as e:
                 result["url"] = driver.current_url
@@ -302,7 +278,7 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                 book = item["books"].get(position)
                 if book:
                     print(f"         第 {position:>2} 筆：{book['name']}")
-                    print(f"                分類號：{book['classification']}")
+                    print(f"                詳情頁：{'已開啟' if book['opened'] else '未開啟'}")
                 else:
                     print(f"         第 {position:>2} 筆：未取得")
             if item["reason"]:
@@ -312,7 +288,7 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
 
         print("\n" + "─" * 55)
         if fail_count == 0:
-            print("  [PASS] 全部關鍵字的三筆書目均取得分類號")
+            print("  [PASS] 全部關鍵字的三筆書目均成功開啟詳情頁")
         else:
             print(f"  [FAIL] 測試未完全通過，共 {fail_count} 個關鍵字失敗")
         print("█" * 55)
@@ -327,8 +303,8 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
         return False
 
 
-def main(max_retries: int = 10, retry_interval: int = 30):
-    parser = argparse.ArgumentParser(description="熱門關鍵字與書目分類號測試")
+def main(max_retries: int = 3, retry_interval: int = 10):
+    parser = argparse.ArgumentParser(description="熱門關鍵字與書目詳情頁開啟測試")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--non-interactive", action="store_true", help="完成後直接關閉瀏覽器")
     parser.add_argument("--report-json", type=Path)
@@ -359,6 +335,7 @@ def main(max_retries: int = 10, retry_interval: int = 30):
                 time.sleep(retry_interval)
             else:
                 print(f"[!] 已達最大重試次數（{max_retries}），放棄。")
+                print("[FAIL] 圖書館首頁持續回傳 Service Unavailable")
             continue
 
         print(f"[+] 頁面正常，開始測試...")

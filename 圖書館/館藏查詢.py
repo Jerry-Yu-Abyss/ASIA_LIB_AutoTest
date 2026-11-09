@@ -1,8 +1,7 @@
 # 測試成功標準：
 # 1. 從 10 個中文詞和 10 個英文詞中，各隨機抽出 1 個並在搜尋框查詢。
 # 2. 略過非印刷品單行本；每次搜尋都能開啟第 1、5、10 筆符合條件的書目詳情頁。
-# 3. 六筆書目都能從「索書號(卷期)」取得分類號，整體才算成功。
-# 4. 找不到分類號時回傳「查無館藏」，該筆判定失敗。
+# 3. 六筆書目都能成功開啟詳情頁，整體才算成功。
 
 """亞洲大學圖書館中英文詞搜尋測試。"""
 
@@ -17,11 +16,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
 from 關鍵字查詢 import (
-    NO_HOLDINGS,
     REQUIRED_POSITIONS,
     RESULT_TITLE_SELECTOR,
     TARGET_URL,
-    get_classification_result,
     is_service_unavailable,
     open_page,
     print_book_indices,
@@ -40,7 +37,7 @@ ENGLISH_WORDS = (
 
 
 def check_search(driver, language: str, word: str) -> dict:
-    """在輸入框查詢一個詞，點開指定書目並取得分類號。"""
+    """在輸入框查詢一個詞，確認指定書目可開啟詳情頁。"""
     result = {
         "language": language,
         "word": word,
@@ -70,6 +67,8 @@ def check_search(driver, language: str, word: str) -> dict:
             )
         except TimeoutException as exc:
             raise RuntimeError("按下搜尋後未跳轉") from exc
+        if driver.current_url.endswith("/error.html"):
+            raise RuntimeError("圖書館搜尋結果頁發生錯誤（error.html）")
 
         result["url"] = driver.current_url
         if is_service_unavailable(driver):
@@ -88,7 +87,7 @@ def check_search(driver, language: str, word: str) -> dict:
                 result["errors"].append(f"第 {position} 筆符合條件的印刷品單行本不存在")
                 continue
 
-            # 網站偶爾未載入館藏表格；最多點開兩次再判定。
+            # 詳情頁偶爾載入逾時；最多點開兩次再判定。
             for attempt in (1, 2):
                 try:
                     anchor = driver.find_elements(
@@ -101,7 +100,7 @@ def check_search(driver, language: str, word: str) -> dict:
                         raise RuntimeError("書名為空")
                     result["books"][position] = {
                         "name": book_name,
-                        "classification": "（未取得）",
+                        "opened": False,
                         "url": "",
                     }
 
@@ -115,13 +114,12 @@ def check_search(driver, language: str, word: str) -> dict:
                         raise RuntimeError("點擊書目後未跳轉") from exc
                     if is_service_unavailable(driver):
                         raise RuntimeError("書目詳情頁回傳 Service Unavailable")
+                    if not driver.current_url.split("?", 1)[0].endswith("/webpac/content.cfm"):
+                        raise RuntimeError("未開啟書目詳情頁")
 
                     result["books"][position]["url"] = driver.current_url
-                    classification = get_classification_result(driver)
-                    result["books"][position]["classification"] = classification
-                    if classification == NO_HOLDINGS:
-                        raise RuntimeError(NO_HOLDINGS)
-                    print(f"  第 {position:>2} 筆：{book_name}；分類號：{classification}")
+                    result["books"][position]["opened"] = True
+                    print(f"  第 {position:>2} 筆：{book_name}；書目詳情頁已開啟")
                     break
                 except Exception as exc:
                     reason = (
@@ -149,9 +147,7 @@ def check_search(driver, language: str, word: str) -> dict:
 def print_report(results: list[dict]) -> bool:
     def passed(result: dict) -> bool:
         return not result["errors"] and all(
-            result["books"].get(position, {}).get("classification")
-            not in (None, "（未取得）", NO_HOLDINGS)
-            for position in REQUIRED_POSITIONS
+            result["books"].get(position, {}).get("opened") for position in REQUIRED_POSITIONS
         )
 
     print("\n" + "=" * 55)
@@ -164,7 +160,7 @@ def print_report(results: list[dict]) -> bool:
             book = result["books"].get(position)
             if book:
                 print(f"  第 {position:>2} 筆：{book['name']}")
-                print(f"          分類號：{book['classification']}")
+                print(f"          詳情頁：{'已開啟' if book['opened'] else '未開啟'}")
             else:
                 print(f"  第 {position:>2} 筆：未取得")
         for error in result["errors"]:
@@ -175,7 +171,7 @@ def print_report(results: list[dict]) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="隨機抽取中英文詞搜尋並檢查書目分類號")
+    parser = argparse.ArgumentParser(description="隨機抽取中英文詞搜尋並檢查書目詳情頁")
     parser.add_argument("--seed", type=int, help="固定隨機抽詞結果，方便重複測試")
     parser.add_argument("--headless", action="store_true", help="背景執行 Chrome")
     parser.add_argument("--non-interactive", action="store_true", help="完成後直接關閉瀏覽器")

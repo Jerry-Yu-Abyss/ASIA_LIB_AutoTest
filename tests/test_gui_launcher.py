@@ -35,6 +35,14 @@ class GuiCommandTests(unittest.TestCase):
         self.assertEqual(command[-1], "--send-test")
         self.assertNotIn("--no-line", command)
 
+    def test_broadcast_is_explicit_in_gui_command(self):
+        command = gui.build_command("全部", send_line=True, show_browser=True, broadcast=True)
+        self.assertIn("--broadcast", command)
+        self.assertNotIn("--no-line", command)
+        test_command = gui.build_command("全部", send_line=False, show_browser=True,
+                                         line_test=True, broadcast=True)
+        self.assertEqual(test_command[-2:], ["--send-test", "--broadcast"])
+
     def test_gui_decodes_unicode_output_when_parent_uses_cp950(self):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "output.py"
