@@ -22,6 +22,33 @@ USER_ID = "U" + "a" * 32
 
 
 class LineRunnerTests(unittest.TestCase):
+    def test_print_book_positions_skip_electronic_resources(self):
+        class Driver:
+            def __init__(self):
+                self.types = ["書目-電子資源:單行本"] + [keyword_module.PRINT_BOOK_TYPE] * 10
+
+            def find_elements(self, by, selector):
+                if selector == keyword_module.RESULT_BOX_SELECTOR:
+                    return [Box(book_type) for book_type in self.types]
+                return []
+
+        class Box:
+            def __init__(self, book_type):
+                self.book_type = book_type
+
+            def find_elements(self, by, selector):
+                return [Icon(self.book_type)] if selector == keyword_module.BOOK_TYPE_SELECTOR else []
+
+        class Icon:
+            def __init__(self, alt):
+                self.alt = alt
+
+            def get_attribute(self, name):
+                return self.alt if name == "alt" else None
+
+        driver = Driver()
+        self.assertEqual(keyword_module.print_book_indices(driver), list(range(1, 11)))
+
     def test_only_four_runnable_catalog_scripts_are_scheduled(self):
         self.assertEqual(
             [script for _, script, _ in notify.SUITES],

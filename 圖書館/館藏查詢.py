@@ -1,6 +1,6 @@
 # 測試成功標準：
 # 1. 從 10 個中文詞和 10 個英文詞中，各隨機抽出 1 個並在搜尋框查詢。
-# 2. 每次搜尋都能開啟第 1、5、10 筆書目的詳情頁。
+# 2. 略過非印刷品單行本；每次搜尋都能開啟第 1、5、10 筆符合條件的書目詳情頁。
 # 3. 六筆書目都能從「索書號(卷期)」取得分類號，整體才算成功。
 # 4. 找不到分類號時回傳「查無館藏」，該筆判定失敗。
 
@@ -24,6 +24,8 @@ from 關鍵字查詢 import (
     get_classification_result,
     is_service_unavailable,
     open_page,
+    print_book_indices,
+    show_more_results,
 )
 from 網頁載入 import get_with_retries
 
@@ -75,12 +77,15 @@ def check_search(driver, language: str, word: str) -> dict:
         WebDriverWait(driver, 20).until(
             lambda d: d.find_elements(By.ID, "list")
         )
+        result["url"] = show_more_results(driver)
         result_count = len(driver.find_elements(By.CSS_SELECTOR, RESULT_TITLE_SELECTOR))
         print(f"  搜尋結果：{result_count} 筆；網址：{result['url']}")
 
+        eligible_indices = print_book_indices(driver)
+        print(f"  符合印刷品單行本：{len(eligible_indices)} 筆")
         for position in REQUIRED_POSITIONS:
-            if result_count < position:
-                result["errors"].append(f"第 {position} 筆不存在")
+            if len(eligible_indices) < position:
+                result["errors"].append(f"第 {position} 筆符合條件的印刷品單行本不存在")
                 continue
 
             # 網站偶爾未載入館藏表格；最多點開兩次再判定。
@@ -88,7 +93,7 @@ def check_search(driver, language: str, word: str) -> dict:
                 try:
                     anchor = driver.find_elements(
                         By.CSS_SELECTOR, RESULT_TITLE_SELECTOR
-                    )[position - 1]
+                    )[eligible_indices[position - 1]]
                     book_name = (
                         anchor.get_attribute("title") or anchor.text or ""
                     ).strip()

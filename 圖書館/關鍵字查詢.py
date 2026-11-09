@@ -1,6 +1,6 @@
 # 測試成功標準：
 # 1. 所有熱門關鍵字皆可被點擊，且點擊後能成功跳轉至搜尋結果頁。
-# 2. 每個關鍵字的第 1、5、10 筆搜尋結果都能點開書目詳情頁。
+# 2. 略過非印刷品單行本；每個關鍵字第 1、5、10 筆符合條件的書目都能點開詳情頁。
 # 3. 三筆書目都能從「索書號(卷期)」欄位取得分類號，才算該關鍵字成功。
 # 4. 所有關鍵字均符合上述條件，才算整體成功。
 # 找不到分類號時回傳「查無館藏」，並判定該筆失敗。
@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 import re
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -31,9 +32,40 @@ else:
 
 TARGET_URL = "https://aulib.asia.edu.tw/webpac/search.cfm"
 RESULT_TITLE_SELECTOR = "#list .list_box .title ul li:last-child a"
+RESULT_BOX_SELECTOR = "#list .list_box"
 REQUIRED_POSITIONS = (1, 5, 10)
+PRINT_BOOK_TYPE = "書目-語言資料,印刷品:單行本"
+BOOK_TYPE_SELECTOR = ".product_info .product_info_content img[alt]"
 NO_HOLDINGS = "查無館藏"
 CALL_NUMBER_PREFIX = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{0,3}\d+(?:\.[A-Za-z0-9]+)*)")
+
+
+def show_more_results(driver: webdriver.Chrome) -> str:
+    """把預設每頁 10 筆改成 100 筆，供印刷品篩選使用。"""
+    url = urlsplit(driver.current_url)
+    params = dict(parse_qsl(url.query, keep_blank_values=True))
+    params.update(list_num="100", current_page="1")
+    expanded_url = urlunsplit((url.scheme, url.netloc, url.path, urlencode(params), url.fragment))
+    get_with_retries(driver, expanded_url)
+    WebDriverWait(driver, 20).until(
+        lambda d: d.find_elements(By.CSS_SELECTOR, RESULT_TITLE_SELECTOR) or False
+    )
+    return driver.current_url
+
+
+def print_book_indices(driver: webdriver.Chrome) -> list[int]:
+    """從搜尋結果的書目類型標示挑出印刷品單行本。"""
+    indices = []
+    for index, box in enumerate(driver.find_elements(By.CSS_SELECTOR, RESULT_BOX_SELECTOR)):
+        icons = box.find_elements(By.CSS_SELECTOR, BOOK_TYPE_SELECTOR)
+        book_type = (icons[0].get_attribute("alt") or "").strip() if icons else ""
+        if book_type == PRINT_BOOK_TYPE:
+            indices.append(index)
+            if len(indices) == max(REQUIRED_POSITIONS):
+                break
+        else:
+            print(f"      略過搜尋結果第 {index + 1} 筆：{book_type or '未標示書目類型'}")
+    return indices
 
 
 def get_classification_result(driver: webdriver.Chrome) -> str:
@@ -111,7 +143,7 @@ def is_service_unavailable(driver: webdriver.Chrome) -> bool:
 
 def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None) -> bool:
     """
-    逐一點擊熱門關鍵字，再點開第 1、5、10 筆書目並讀取分類號。
+    逐一點擊熱門關鍵字，再點開第 1、5、10 筆印刷品單行本並讀取分類號。
     所有關鍵字的三筆書目都成功取得分類號才回傳 True。
     """
     print("\n" + "=" * 55)
@@ -168,13 +200,16 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                 WebDriverWait(driver, 20).until(
                     EC.presence_of_element_located((By.ID, "list"))
                 )
+                result["url"] = show_more_results(driver)
                 result_count = len(driver.find_elements(By.CSS_SELECTOR, RESULT_TITLE_SELECTOR))
                 print(f"  [+] 搜尋結果共載入 {result_count} 筆")
 
+                eligible_indices = print_book_indices(driver)
+                print(f"  [+] 符合印刷品單行本：{len(eligible_indices)} 筆")
                 missing = []
                 for position in REQUIRED_POSITIONS:
-                    if result_count < position:
-                        missing.append(f"第 {position} 筆不存在")
+                    if len(eligible_indices) < position:
+                        missing.append(f"第 {position} 筆符合條件的印刷品單行本不存在")
                         continue
 
                     # 詳情頁偶爾載入逾時；失敗時重試一次，再記入報告。
@@ -183,7 +218,7 @@ def check_hot_keywords(driver: webdriver.Chrome, report_path: Path | None = None
                             # 返回結果頁後重新定位，避免沿用失效的 WebElement。
                             title_anchor = driver.find_elements(
                                 By.CSS_SELECTOR, RESULT_TITLE_SELECTOR
-                            )[position - 1]
+                            )[eligible_indices[position - 1]]
                             book_name = (
                                 title_anchor.get_attribute("title")
                                 or title_anchor.text
