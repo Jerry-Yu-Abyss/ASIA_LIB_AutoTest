@@ -9,7 +9,7 @@
 在專案根目錄執行一次共用安裝指令（包含此工具所需套件）：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\setup.ps1
 ```
 
 ## 用選檔視窗選擇 XLS

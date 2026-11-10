@@ -12,10 +12,10 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "排程.local.json"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
-RUNNER = ROOT / "run_and_notify.py"
+RUNNER = ROOT / "LINE通知" / "run_and_notify.py"
 TASK_NAME = "AU Library Automated Test"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
@@ -117,9 +117,9 @@ def exists() -> bool:
 def save(settings: dict, command: list[str]) -> None:
     settings = validate(settings)
     if not PYTHON.is_file():
-        raise RuntimeError("找不到專案 Python，請先執行 setup.ps1")
+        raise RuntimeError("找不到專案 Python，請先開啟環境設置資料夾執行安裝精靈")
     if not RUNNER.is_file():
-        raise RuntimeError("找不到檢測程式 run_and_notify.py")
+        raise RuntimeError("找不到檢測程式 LINE通知/run_and_notify.py")
     xml = task_xml(settings, command)
     with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as file:
         path = Path(file.name)

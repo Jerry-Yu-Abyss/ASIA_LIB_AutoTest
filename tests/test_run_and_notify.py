@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import run_and_notify as notify
+from LINE通知 import run_and_notify as notify
 from 圖書館.檢測功能 import 館藏查詢 as catalog_module
 from 圖書館.調用子程式 import 帳號登入 as login_module
 from 圖書館.調用子程式 import 查詢共用 as search_module

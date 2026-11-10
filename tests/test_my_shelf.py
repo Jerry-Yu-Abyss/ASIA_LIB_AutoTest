@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from 圖書館.檢測功能 import 我的書房 as shelf
-import run_and_notify as notify
+from LINE通知 import run_and_notify as notify
 
 
 class ShelfTests(unittest.TestCase):

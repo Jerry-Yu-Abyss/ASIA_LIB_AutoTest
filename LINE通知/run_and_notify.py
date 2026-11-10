@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 LINE_CONFIG = ROOT / "config" / "line.local.json"
 REPORT_DIR = ROOT / ".local" / "reports"
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"

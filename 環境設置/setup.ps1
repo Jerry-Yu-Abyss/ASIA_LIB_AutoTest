@@ -1,7 +1,7 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $venvPath = Join-Path $projectRoot '.venv'
 $venvPython = Join-Path $venvPath 'Scripts\python.exe'
 $requirements = Join-Path $projectRoot 'requirements.txt'

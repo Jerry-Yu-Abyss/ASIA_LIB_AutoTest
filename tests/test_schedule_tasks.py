@@ -7,10 +7,16 @@ import xml.etree.ElementTree as ET
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import schedule_tasks as schedule
+from 排程設置 import schedule_tasks as schedule
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_schedule_paths_still_point_to_project_root(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual(schedule.ROOT, root)
+        self.assertEqual(schedule.RUNNER, root / "LINE通知" / "run_and_notify.py")
+        self.assertEqual(schedule.CONFIG, root / "config" / "排程.local.json")
+
     def test_multiple_times_and_weekdays(self):
         settings = {"frequency": "weekly", "times": "18:30，9:00; 18:30", "days": [4, 0],
                     "suite": "館藏查詢", "send_line": False, "broadcast": False,
