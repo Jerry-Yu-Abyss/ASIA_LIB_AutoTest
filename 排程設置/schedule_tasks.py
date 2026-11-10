@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 
+from 圖書館.環境檢查 import environment_ready
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "排程.local.json"
@@ -116,8 +118,8 @@ def exists() -> bool:
 
 def save(settings: dict, command: list[str]) -> None:
     settings = validate(settings)
-    if not PYTHON.is_file():
-        raise RuntimeError("找不到專案 Python，請先開啟環境設置資料夾執行安裝精靈")
+    if not environment_ready(ROOT):
+        raise RuntimeError("專案環境尚未在這台電腦及目前位置建立，請先執行一鍵安裝")
     if not RUNNER.is_file():
         raise RuntimeError("找不到檢測程式 LINE通知/run_and_notify.py")
     xml = task_xml(settings, command)

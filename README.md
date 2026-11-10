@@ -4,21 +4,22 @@
 
 ## 新電腦安裝
 
-適用 Windows 10／11。請將整個專案資料夾複製到新電腦，但不要搬移舊電腦的 `.venv`。每台電腦都要重新建立專案環境。
+適用 Windows 10／11。可將整個專案資料夾複製到隨身碟，再複製到新電腦的任意位置。安裝程式會辨識並重建從舊電腦或舊路徑帶來的 `.venv`，不需手動清理。
 
-1. 在檔案總管雙擊 **`環境設置/開啟安裝精靈.cmd`**。
-2. 依視窗提示安裝 Python 3.10 以上、Google Chrome，以及登入驗證碼所需的 Tesseract。安裝 Python 後，重新開啟安裝精靈。
-3. 按 **「安裝／更新專案環境」**，等待畫面顯示安裝完成。
-4. 按 **「編輯測試帳號」**，填入圖書館測試帳號與密碼。需要 LINE 回報時，再按 **「編輯 LINE 設定」**，填入 Channel access token 與 User ID。
-5. 按 **「開啟檢測視窗」**。第一次可先取消「完成後傳送 LINE 結果」，選擇「館藏查詢」試跑。確認 LINE 設定後，可按「只測 LINE 連線」。
+1. 在檔案總管雙擊 **`環境設置/開啟安裝精靈.cmd`**；若要直接用命令視窗安裝，可雙擊 **`環境設置/一鍵安裝.cmd`**。
+2. 若使用安裝精靈，按 **「一鍵安裝／更新」**；命令視窗版會直接開始。兩種入口都會透過 Windows `winget` 安裝缺少的 Python、Google Chrome 和 Tesseract，再建立專案環境。若 Windows 要求授權，請依畫面操作。
+3. 按 **「編輯測試帳號」**，填入圖書館測試帳號與密碼。需要 LINE 回報時，再按 **「編輯 LINE 設定」**，填入 Channel access token 與 User ID。
+4. 按 **「開啟檢測視窗」**。第一次可先取消「完成後傳送 LINE 結果」，選擇「館藏查詢」試跑。確認 LINE 設定後，可按「只測 LINE 連線」。
 
-安裝精靈會呼叫 [`環境設置/setup.ps1`](環境設置/setup.ps1)。想知道環境檢查、安裝套件或手動執行方式，可直接閱讀該腳本與 [`requirements.txt`](requirements.txt)。若只用命令列安裝，在專案根目錄執行：
+安裝精靈會呼叫 [`環境設置/install_all.ps1`](環境設置/install_all.ps1)，再由 [`setup.ps1`](環境設置/setup.ps1) 建立專案環境。想知道安裝命令與套件清單，可閱讀腳本及 [`requirements.txt`](requirements.txt)。若要用命令列執行相同的一鍵安裝，在專案根目錄執行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\install_all.ps1
 ```
 
-安裝腳本會建立 `.venv`，並在缺少時建立本機設定檔；不會覆寫已存在的設定。首次測試需要連網下載相容的 ChromeDriver。若曾把舊電腦的 `.venv` 搬過來，請先移走它再安裝。
+安裝腳本會為目前電腦與專案位置建立 `.venv`，並在缺少時建立本機設定檔；不會覆寫已存在的帳號與 LINE 設定。首次測試需要連網下載相容的 ChromeDriver。
+
+若安裝後又把專案移到其他磁碟或資料夾，請在新位置重跑「一鍵安裝」。自動排程會記錄執行檔的絕對路徑；移轉電腦或更改資料夾位置後，請在檢測視窗重新按「儲存／更新排程」。
 
 ## 日常使用
 
@@ -39,7 +40,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\setup.ps1
 ├─ requirements.txt            Python 套件清單
 ├─ 環境設置/                   新電腦安裝入口
 │  ├─ 開啟安裝精靈.cmd         雙擊開啟
+│  ├─ 一鍵安裝.cmd             直接在命令視窗安裝
 │  ├─ installer_gui.ps1        安裝與設定視窗
+│  ├─ install_all.ps1          一鍵安裝系統程式及專案環境
 │  └─ setup.ps1                實際環境建置腳本
 ├─ LINE通知/                   測試執行與 LINE 回報
 │  ├─ run_and_notify.py        執行各項測試、整理及發送結果
@@ -52,6 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\setup.ps1
 │  ├─ line.example.json
 │  └─ *.local.json             安裝後建立；不納入版本庫
 ├─ 圖書館/                     網站檢測程式
+│  ├─ 環境檢查.py              判斷環境是否屬於目前電腦與位置
 │  ├─ 檢測功能/                各項獨立檢測
 │  └─ 調用子程式/              登入、驗證碼與網頁共用功能
 ├─ 個人化書單分類號抓取/     獨立的書單工具及說明

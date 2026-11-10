@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
 from 排程設置 import schedule_tasks
+from 圖書館.環境檢查 import environment_ready
 
 
 ROOT = Path(__file__).resolve().parent
@@ -178,8 +179,8 @@ class TestWindow:
     def start(self, line_test: bool = False) -> None:
         if self.running:
             return
-        if not PYTHON.is_file():
-            messagebox.showerror("尚未安裝環境", "找不到專案的 .venv\\Scripts\\python.exe。\n請先開啟環境設置資料夾執行安裝精靈。")
+        if not environment_ready(ROOT):
+            messagebox.showerror("尚未安裝環境", "專案環境尚未在這台電腦及目前位置建立。\n請先開啟環境設置資料夾執行一鍵安裝。")
             return
         if not RUNNER.is_file():
             messagebox.showerror("找不到檢測程式", f"找不到 {RUNNER.name}")

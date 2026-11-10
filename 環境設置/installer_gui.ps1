@@ -6,8 +6,9 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$setupScript = Join-Path $PSScriptRoot 'setup.ps1'
+$installScript = Join-Path $PSScriptRoot 'install_all.ps1'
 $venvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
+$venvMarker = Join-Path $projectRoot '.venv\.project-install.json'
 $accountConfig = Join-Path $projectRoot 'config\測試帳號.local.json'
 $lineConfig = Join-Path $projectRoot 'config\line.local.json'
 $currentJob = $null
@@ -56,15 +57,24 @@ function Has-Tesseract {
     return $false
 }
 
+function Has-CurrentEnvironment {
+    if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $venvMarker -PathType Leaf)) { return $false }
+    try {
+        $marker = Get-Content -LiteralPath $venvMarker -Raw -Encoding UTF8 | ConvertFrom-Json
+        return $marker.projectRoot -eq $projectRoot -and $marker.machine -eq [Environment]::MachineName
+    } catch { return $false }
+}
+
 function Refresh-Status {
-    $pythonStatus = if (Has-Python) { '已找到' } else { '未找到（需 Python 3.10 以上）' }
+    $pythonStatus = if ((Has-Python) -or (Has-CurrentEnvironment)) { '已找到' } else { '未找到（需 Python 3.10 以上）' }
     $chromeStatus = if (Has-Chrome) { '已找到' } else { '未找到' }
     $tesseractStatus = if (Has-Tesseract) { '已找到' } else { '未找到（登入驗證碼需要）' }
-    $environmentStatus = if (Test-Path -LiteralPath $venvPython) { '已建立' } else { '尚未建立' }
+    $environmentStatus = if (Has-CurrentEnvironment) { '可在此電腦使用' } else { '尚未建立／需要重建' }
     $status.Text = "Python：$pythonStatus`r`nChrome：$chromeStatus`r`nTesseract：$tesseractStatus`r`n專案環境：$environmentStatus"
     $accountButton.Enabled = Test-Path -LiteralPath $accountConfig
     $lineButton.Enabled = Test-Path -LiteralPath $lineConfig
-    $testButton.Enabled = Test-Path -LiteralPath $venvPython
+    $testButton.Enabled = Has-CurrentEnvironment
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -81,7 +91,7 @@ $title.SetBounds(20, 16, 650, 38)
 $form.Controls.Add($title)
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = '先安裝 Python、Chrome、Tesseract，再按「安裝／更新專案環境」。安裝完成後填入本機帳號與 LINE 設定。'
+$hint.Text = '按「一鍵安裝」會自動安裝缺少的 Python、Chrome、Tesseract 與專案套件。完成後填入本機帳號及 LINE 設定。'
 $hint.SetBounds(20, 59, 655, 45)
 $form.Controls.Add($hint)
 
@@ -90,25 +100,18 @@ $status.SetBounds(20, 110, 650, 100)
 $form.Controls.Add($status)
 
 $refreshButton = New-Button '重新檢查' 20 215 105 { Refresh-Status }
-$pythonLink = New-Button '取得 Python' 135 215 115 { Start-Process 'https://www.python.org/downloads/' }
-$chromeLink = New-Button '取得 Chrome' 260 215 115 { Start-Process 'https://www.google.com/chrome/' }
-$tesseractLink = New-Button '取得 Tesseract' 385 215 135 { Start-Process 'https://github.com/UB-Mannheim/tesseract/wiki' }
 
-$installButton = New-Button '安裝／更新專案環境' 20 263 190 {
+$installButton = New-Button '一鍵安裝／更新' 20 263 190 {
     if ($null -ne $script:currentJob) { return }
-    if (-not (Has-Python) -and -not (Test-Path -LiteralPath $script:venvPython)) {
-        [System.Windows.Forms.MessageBox]::Show('請先安裝 Python 3.10 以上，重新開啟安裝精靈。', '尚未找到 Python') | Out-Null
-        return
-    }
     $script:installButton.Enabled = $false
-    Append-Log '開始安裝專案環境，請稍候…'
+    Append-Log '開始一鍵安裝；需要系統授權時請依 Windows 提示操作…'
     try {
         $script:currentJob = Start-Job -ScriptBlock {
             param($scriptPath)
             [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $env:PYTHONIOENCODING = 'utf-8'
             & $scriptPath *>&1 | ForEach-Object { $_.ToString() }
-        } -ArgumentList $script:setupScript
+        } -ArgumentList $script:installScript
         $script:timer.Start()
     } catch {
         $script:installButton.Enabled = $true

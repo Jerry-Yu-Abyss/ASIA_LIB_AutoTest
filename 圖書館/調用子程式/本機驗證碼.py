@@ -12,8 +12,11 @@ from PIL import Image, ImageOps
 
 def tesseract_command() -> str:
     configured = os.environ.get("TESSERACT_CMD")
-    candidates = [configured, shutil.which("tesseract"),
-                  str(Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tesseract-OCR" / "tesseract.exe")]
+    candidates = [configured, shutil.which("tesseract")]
+    for key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(key)
+        if base:
+            candidates.append(str(Path(base) / "Tesseract-OCR" / "tesseract.exe"))
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return candidate

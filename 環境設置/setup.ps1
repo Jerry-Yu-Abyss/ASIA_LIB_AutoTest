@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $venvPath = Join-Path $projectRoot '.venv'
 $venvPython = Join-Path $venvPath 'Scripts\python.exe'
+$venvMarker = Join-Path $venvPath '.project-install.json'
 $requirements = Join-Path $projectRoot 'requirements.txt'
 $exampleConfig = Join-Path $projectRoot 'config\測試帳號.example.json'
 $localConfig = Join-Path $projectRoot 'config\測試帳號.local.json'
@@ -17,6 +18,12 @@ function Assert-LastCommandSucceeded([string]$description) {
 }
 
 function Find-Python {
+    if ($env:PROJECT_PYTHON -and (Test-Path -LiteralPath $env:PROJECT_PYTHON -PathType Leaf)) {
+        & $env:PROJECT_PYTHON -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            return @{ Name = $env:PROJECT_PYTHON; Args = @() }
+        }
+    }
     $candidates = @(
         @{ Name = 'py'; Args = @('-3') },
         @{ Name = 'python'; Args = @() }
@@ -25,7 +32,8 @@ function Find-Python {
         $command = Get-Command $candidate.Name -ErrorAction SilentlyContinue
         if ($null -eq $command) { continue }
         try {
-            & $command.Source @($candidate.Args) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+            $arguments = @($candidate.Args)
+            & $command.Source @arguments -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
             if ($LASTEXITCODE -eq 0) {
                 return $candidate
             }
@@ -36,28 +44,76 @@ function Find-Python {
     throw '找不到 Python 3.10 以上版本。請先安裝 Python，重新開啟 PowerShell 後再執行。'
 }
 
+function Test-CurrentVenv {
+    if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $venvMarker -PathType Leaf)) { return $false }
+    try {
+        $marker = Get-Content -LiteralPath $venvMarker -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($marker.projectRoot -ne $projectRoot -or
+            $marker.machine -ne [Environment]::MachineName) { return $false }
+        & $venvPython -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Assert-ProjectVenvPath([string]$path) {
+    $rootFull = [IO.Path]::GetFullPath($projectRoot).TrimEnd('\')
+    $parentFull = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($path)).TrimEnd('\')
+    if (-not [string]::Equals($rootFull, $parentFull, [StringComparison]::OrdinalIgnoreCase)) {
+        throw '虛擬環境路徑不在專案根目錄，已停止移動或清理。'
+    }
+}
+
 Set-Location -LiteralPath $projectRoot
 Write-Host "專案位置：$projectRoot"
 
-if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-    if (Test-Path -LiteralPath $venvPath) {
-        throw '已存在 .venv，但找不到其中的 Python。請先自行移走損壞的 .venv，再重新執行。'
-    }
-    $python = Find-Python
-    Write-Host '正在建立專案專用的 Python 環境...'
-    & $python.Name @($python.Args) -m venv $venvPath
-    Assert-LastCommandSucceeded '建立虛擬環境'
+$rebuild = -not (Test-CurrentVenv)
+$backupPath = $null
+if ($rebuild -and (Test-Path -LiteralPath $venvPath)) {
+    Assert-ProjectVenvPath $venvPath
+    $backupPath = Join-Path $projectRoot ".venv.backup-$PID"
+    Assert-ProjectVenvPath $backupPath
+    if (Test-Path -LiteralPath $backupPath) { throw "暫存資料夾已存在：$backupPath" }
+    Write-Host '偵測到從其他電腦或路徑複製的 .venv，正在重新建立...'
+    Move-Item -LiteralPath $venvPath -Destination $backupPath
 }
 
-& $venvPython -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
-Assert-LastCommandSucceeded '檢查虛擬環境的 Python 版本（需要 3.10 以上）'
+try {
+    if ($rebuild) {
+        $python = Find-Python
+        Write-Host '正在建立專案專用的 Python 環境...'
+        $arguments = @($python.Args)
+        & $python.Name @arguments -m venv $venvPath
+        Assert-LastCommandSucceeded '建立虛擬環境'
+    }
 
-Write-Host '正在安裝專案套件...'
-& $venvPython -m pip install -r $requirements
-Assert-LastCommandSucceeded '安裝套件'
+    & $venvPython -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
+    Assert-LastCommandSucceeded '檢查虛擬環境的 Python 版本（需要 3.10 以上）'
 
-& $venvPython -c 'import selenium, webdriver_manager, requests, lxml, openpyxl, PIL'
-Assert-LastCommandSucceeded '檢查套件'
+    Write-Host '正在安裝專案套件...'
+    & $venvPython -m pip install -r $requirements
+    Assert-LastCommandSucceeded '安裝套件'
+
+    & $venvPython -c 'import selenium, webdriver_manager, requests, lxml, openpyxl, PIL'
+    Assert-LastCommandSucceeded '檢查套件'
+
+    @{ projectRoot = $projectRoot; machine = [Environment]::MachineName } |
+        ConvertTo-Json | Set-Content -LiteralPath $venvMarker -Encoding UTF8
+} catch {
+    if ($backupPath) {
+        Assert-ProjectVenvPath $venvPath
+        if (Test-Path -LiteralPath $venvPath) { Remove-Item -LiteralPath $venvPath -Recurse -Force }
+        Move-Item -LiteralPath $backupPath -Destination $venvPath
+        Write-Warning '環境重建失敗；已還原原本的 .venv。'
+    }
+    throw
+}
+if ($backupPath) {
+    Assert-ProjectVenvPath $backupPath
+    Remove-Item -LiteralPath $backupPath -Recurse -Force
+}
 
 if (-not (Test-Path -LiteralPath $localConfig -PathType Leaf)) {
     Copy-Item -LiteralPath $exampleConfig -Destination $localConfig
