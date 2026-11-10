@@ -6,18 +6,16 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "圖書館"))
 
 import run_and_notify as notify
-import 館藏查詢 as catalog_module
-from 圖書館 import 帳號登入 as login_module
-from 圖書館 import 關鍵字查詢 as keyword_module
-from 圖書館 import 網頁載入 as loading_module
-from 圖書館.帳號登入 import login
-from selenium.common.exceptions import WebDriverException
+from 圖書館.檢測功能 import 館藏查詢 as catalog_module
+from 圖書館.調用子程式 import 帳號登入 as login_module
+from 圖書館.調用子程式 import 查詢共用 as search_module
+from 圖書館.調用子程式 import 網頁載入 as loading_module
+from 圖書館.調用子程式.帳號登入 import login
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
 USER_ID = "U" + "a" * 32
@@ -27,10 +25,10 @@ class LineRunnerTests(unittest.TestCase):
     def test_print_book_positions_skip_electronic_resources(self):
         class Driver:
             def __init__(self):
-                self.types = ["書目-電子資源:單行本"] + [keyword_module.PRINT_BOOK_TYPE] * 10
+                self.types = ["書目-電子資源:單行本"] + [search_module.PRINT_BOOK_TYPE] * 10
 
             def find_elements(self, by, selector):
-                if selector == keyword_module.RESULT_BOX_SELECTOR:
+                if selector == search_module.RESULT_BOX_SELECTOR:
                     return [Box(book_type) for book_type in self.types]
                 return []
 
@@ -39,7 +37,7 @@ class LineRunnerTests(unittest.TestCase):
                 self.book_type = book_type
 
             def find_elements(self, by, selector):
-                return [Icon(self.book_type)] if selector == keyword_module.BOOK_TYPE_SELECTOR else []
+                return [Icon(self.book_type)] if selector == search_module.BOOK_TYPE_SELECTOR else []
 
         class Icon:
             def __init__(self, alt):
@@ -49,12 +47,12 @@ class LineRunnerTests(unittest.TestCase):
                 return self.alt if name == "alt" else None
 
         driver = Driver()
-        self.assertEqual(keyword_module.print_book_indices(driver), list(range(1, 11)))
+        self.assertEqual(search_module.print_book_indices(driver), list(range(1, 11)))
 
     def test_only_four_runnable_catalog_scripts_are_scheduled(self):
         self.assertEqual(
             [script for _, script, _ in notify.SUITES],
-            ["關鍵字查詢.py", "館藏查詢.py", "網路書店推薦.py", "新書輪播.py"],
+            ["館藏查詢.py", "網路書店推薦.py", "我的書房.py", "新書輪播.py"],
         )
 
     def test_only_one_suite_still_sends_three_line_messages(self):
@@ -155,8 +153,8 @@ class LineRunnerTests(unittest.TestCase):
     def test_all_four_tests_show_browser_by_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            scripts = root / "圖書館"
-            scripts.mkdir()
+            scripts = root / "圖書館" / "檢測功能"
+            scripts.mkdir(parents=True)
             for _, script, _ in notify.SUITES:
                 (scripts / script).write_text("import sys\nprint('PROGRESS', flush=True)\nprint(' '.join(sys.argv), flush=True)\n", encoding="utf-8")
             with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root):
@@ -175,9 +173,9 @@ class LineRunnerTests(unittest.TestCase):
     def test_runner_keeps_timeout_with_live_output(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            scripts = root / "圖書館"
-            scripts.mkdir()
-            (scripts / "關鍵字查詢.py").write_text(
+            scripts = root / "圖書館" / "檢測功能"
+            scripts.mkdir(parents=True)
+            (scripts / "館藏查詢.py").write_text(
                 "import time\nprint('STARTED', flush=True)\ntime.sleep(3)\n", encoding="utf-8"
             )
             with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root), redirect_stdout(StringIO()) as output:
@@ -189,14 +187,14 @@ class LineRunnerTests(unittest.TestCase):
     def test_connection_timeout_is_reported_clearly(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            scripts = root / "圖書館"
-            scripts.mkdir()
+            scripts = root / "圖書館" / "檢測功能"
+            scripts.mkdir(parents=True)
             (scripts / "館藏查詢.py").write_text(
                 "print('[FAIL] 圖書館網站連線逾時，請稍後再試或檢查網路')\nraise SystemExit(1)\n",
                 encoding="utf-8",
             )
             with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root), redirect_stdout(StringIO()):
-                code, cases, _ = notify.run_suite(notify.SUITES[1], None, 180, 10, "offline")
+                code, cases, _ = notify.run_suite(notify.SUITES[0], None, 180, 10, "offline")
         self.assertEqual(code, 1)
         self.assertIn("圖書館網站連線逾時", cases[0]["reason"])
 
@@ -207,9 +205,9 @@ class LineRunnerTests(unittest.TestCase):
              patch.object(sys, "argv", ["run_and_notify.py", "--no-line"]), \
              redirect_stdout(StringIO()):
             run.side_effect = [
-                (1 if suite[0] == "關鍵字查詢" else 0,
-                 [{"suite": suite[0], "name": "檢測", "passed": suite[0] != "關鍵字查詢",
-                   "reason": "網站錯誤頁" if suite[0] == "關鍵字查詢" else "",
+                (1 if suite[0] == "館藏查詢" else 0,
+                 [{"suite": suite[0], "name": "檢測", "passed": suite[0] != "館藏查詢",
+                   "reason": "網站錯誤頁" if suite[0] == "館藏查詢" else "",
                    "classification": "未取得", "url": suite[2]}],
                  Path(directory) / f"{suite[0]}.log")
                 for suite in notify.SUITES
@@ -217,7 +215,7 @@ class LineRunnerTests(unittest.TestCase):
             self.assertEqual(notify.main(), 1)
             self.assertEqual(run.call_count, 4)
             self.assertEqual([call.args[3] for call in run.call_args_list],
-                             [480, 240, 480, 180])
+                             [240, 480, 480, 180])
             combined = list(Path(directory).glob("*_完整報告.json"))
             self.assertEqual(len(combined), 1)
             self.assertEqual(len(json.loads(combined[0].read_text(encoding="utf-8"))), 4)
@@ -246,7 +244,7 @@ class LineRunnerTests(unittest.TestCase):
                 {"position": 5, "name": "書五", "loaded": True},
                 {"position": 10, "name": "書十", "loaded": True},
             ],
-        }], 1, notify.SUITES[2][2])
+        }], 1, notify.SUITES[1][2])
         self.assertIn("第 1 筆：書目視窗逾時", cases[0]["reason"])
 
     def test_browser_connection_timeout_closes_driver(self):
@@ -268,12 +266,12 @@ class LineRunnerTests(unittest.TestCase):
                 self.closed = True
 
         driver = Driver()
-        with patch.object(keyword_module.ChromeDriverManager, "install", return_value="driver"), \
-             patch.object(keyword_module.webdriver, "Chrome", return_value=driver), \
+        with patch.object(search_module.ChromeDriverManager, "install", return_value="driver"), \
+             patch.object(search_module.webdriver, "Chrome", return_value=driver), \
              patch.object(loading_module.time, "sleep"), \
              redirect_stdout(StringIO()):
             with self.assertRaisesRegex(RuntimeError, "圖書館網站連線逾時"):
-                keyword_module.open_page()
+                search_module.open_page()
         self.assertTrue(driver.closed)
         self.assertEqual(driver.attempts, 2)
 
@@ -314,7 +312,7 @@ class LineRunnerTests(unittest.TestCase):
                       "5": {"classification": "456", "opened": True, "url": "https://aulib.asia.edu.tw/webpac/detail.cfm?id=5"},
                       "10": {"classification": "789", "opened": True, "url": "https://aulib.asia.edu.tw/webpac/detail.cfm?id=10"}},
             "errors": []
-        }], 0, notify.SUITES[1][2])
+        }], 0, notify.SUITES[0][2])
         messages = notify.build_messages([{"name": "館藏查詢", "code": 0, "cases": cases}], datetime.now(timezone.utc))
         self.assertEqual(len(messages), 3)
         self.assertIn("整體：1/1 項通過", messages[0])
@@ -328,7 +326,7 @@ class LineRunnerTests(unittest.TestCase):
     def test_summary_lists_failed_suite_names_without_case_counts(self):
         from datetime import datetime, timezone
         runs = [
-            {"name": "關鍵字查詢", "code": 1, "cases": [{"suite": "關鍵字查詢", "name": "A", "passed": False, "reason": "",
+            {"name": "我的書房", "code": 1, "cases": [{"suite": "我的書房", "name": "A", "passed": False, "reason": "",
                                                      "classification": "未取得", "url": notify.SUITES[0][2]}]},
             {"name": "館藏查詢", "code": 1, "cases": [{"suite": "館藏查詢", "name": "B", "passed": False, "reason": "",
                                                      "classification": "未取得", "url": notify.SUITES[1][2]}]},
@@ -341,7 +339,7 @@ class LineRunnerTests(unittest.TestCase):
         summary = messages[0]
         self.assertEqual(len(summary.splitlines()), 4)
         self.assertIn("整體：2/4 項通過", summary)
-        self.assertIn("未通過：關鍵字查詢, 館藏查詢", summary)
+        self.assertIn("未通過：我的書房, 館藏查詢", summary)
         self.assertNotIn("分類號", "\n".join(messages))
 
     def test_summary_uses_requested_taipei_format(self):
@@ -354,8 +352,8 @@ class LineRunnerTests(unittest.TestCase):
                                   "整體：4/4 項通過\n未通過：無")
 
     def test_opened_book_passes_and_omits_legacy_classification(self):
-        cases = notify.normalize("關鍵字查詢", [{
-            "keyword": "歷史", "success": True, "reason": "",
+        cases = notify.normalize("館藏查詢", [{
+            "language": "中文", "word": "歷史", "errors": [],
             "books": {"1": {"name": "台灣史", "classification": "查無館藏", "opened": True},
                       "5": {"name": "世界史", "classification": "200", "opened": True},
                       "10": {"name": "文化史", "classification": "300", "opened": True}},
@@ -411,28 +409,80 @@ class LineRunnerTests(unittest.TestCase):
         self.assertNotIn("https://", message)
         self.assertIn("失敗", message)
 
-    def test_gemini_503_is_transient(self):
-        error = HTTPError("https://example.invalid", 503, "Unavailable", None, None)
-        with patch.object(login_module, "urlopen", side_effect=error):
-            with self.assertRaises(login_module.GeminiTransientError):
-                login_module.recognize_captcha(b"png", {"gemini_api_key": "dummy"})
+    def test_legacy_mode_uses_tesseract(self):
+        self.assertEqual(login_module.resolve_captcha_mode({"captcha": {"mode": "gemini"}}), "tesseract")
 
-    def test_transient_error_uses_backoff_with_five_captcha_images(self):
+    def test_tesseract_disagreement_retries_five_captcha_images(self):
         class Image:
             screenshot_as_png = b"png"
 
-        config = {"captcha": {"gemini_api_key": "dummy"}}
+        events = []
         with patch.object(login_module, "open_login_form", return_value=Image()), \
              patch.object(login_module, "refresh_captcha", return_value=Image()) as refresh, \
-             patch.object(login_module, "recognize_captcha", side_effect=login_module.GeminiTransientError("HTTP 503")) as recognize, \
-             patch.object(login_module.random, "uniform", return_value=0), \
-             patch.object(login_module.time, "sleep") as sleep, \
+             patch.object(login_module, "tesseract_command", return_value="tesseract"), \
+             patch.object(login_module, "recognize_tesseract", return_value=["Y3F8", "X3F8", "Q3F8"]) as recognize, \
              redirect_stdout(StringIO()):
             with self.assertRaisesRegex(RuntimeError, "已達 5 次上限"):
-                login(None, "https://aulib.asia.edu.tw/webpac/recommend.cfm", config, "gemini", False)
+                login(None, "https://aulib.asia.edu.tw/webpac/recommend.cfm", {}, "tesseract", False,
+                      diagnostic=lambda event, image: events.append((event, image)))
         self.assertEqual(recognize.call_count, 5)
         self.assertEqual(refresh.call_count, 4)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4, 8])
+        self.assertEqual([event[0]["stage"] for event in events].count("image_ready"), 5)
+        self.assertEqual([event[0]["stage"] for event in events].count("recognition_error"), 5)
+        self.assertTrue(all(image == b"png" for event, image in events if event["stage"] == "image_ready"))
+
+    def test_tesseract_majority_submits_answer(self):
+        from unittest.mock import Mock
+
+        class Image:
+            screenshot_as_png = b"png"
+
+        driver = Mock()
+        events = []
+        with patch.object(login_module, "open_login_form", return_value=Image()), \
+             patch.object(login_module, "tesseract_command", return_value="tesseract"), \
+             patch.object(login_module, "recognize_tesseract", return_value=["Y3F8", "Y3F8", "X3F8"]), \
+             patch.object(login_module, "WebDriverWait") as wait, \
+             patch.object(login_module, "get_with_retries"), redirect_stdout(StringIO()):
+            wait.return_value.until.return_value = True
+            login(driver, "https://aulib.asia.edu.tw/webpac/recommend.cfm", {}, "tesseract", False,
+                  diagnostic=lambda event, image: events.append(event))
+        driver.find_element.return_value.send_keys.assert_called_once_with("Y3F8")
+        self.assertIn("recognition", [event["stage"] for event in events])
+        self.assertIn("accepted", [event["stage"] for event in events])
+
+    def test_tesseract_disagreement_does_not_submit(self):
+        class Image:
+            screenshot_as_png = b"png"
+
+        with patch.object(login_module, "MAX_CAPTCHA_ATTEMPTS", 1), \
+             patch.object(login_module, "open_login_form", return_value=Image()), \
+             patch.object(login_module, "tesseract_command", return_value="tesseract"), \
+             patch.object(login_module, "recognize_tesseract", return_value=["Y3F8", "X3F8", "Q3F8"]), \
+             redirect_stdout(StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "三次辨識未能"):
+                login(None, "https://aulib.asia.edu.tw/webpac/recommend.cfm", {}, "tesseract", False)
+
+    def test_tesseract_retries_when_site_does_not_confirm_login(self):
+        from unittest.mock import Mock
+
+        class Image:
+            screenshot_as_png = b"png"
+
+        driver = Mock()
+        driver.switch_to.alert.text = ""
+        events = []
+        with patch.object(login_module, "open_login_form", return_value=Image()) as open_form, \
+             patch.object(login_module, "tesseract_command", return_value="tesseract"), \
+             patch.object(login_module, "recognize_tesseract", return_value=["Y3F8"] * 3), \
+             patch.object(login_module, "WebDriverWait") as wait, \
+             patch.object(login_module, "get_with_retries"), redirect_stdout(StringIO()):
+            wait.return_value.until.side_effect = [TimeoutException(), True, True]
+            login(driver, "https://aulib.asia.edu.tw/webpac/recommend.cfm", {}, "tesseract", False,
+                  diagnostic=lambda event, image: events.append(event))
+        self.assertEqual(open_form.call_count, 2)
+        self.assertEqual([event["stage"] for event in events].count("submitted"), 2)
+        self.assertIn("login_error", [event["stage"] for event in events])
 
     def test_captcha_waits_for_nonzero_loaded_image(self):
         class Image:

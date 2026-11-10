@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from 圖書館 import 新書輪播
+from 圖書館.檢測功能 import 新書輪播
 
 
 DETAIL_URL = "https://aulib.asia.edu.tw/webpac/content.cfm?mid=123"

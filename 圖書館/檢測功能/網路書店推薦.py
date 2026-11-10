@@ -4,7 +4,7 @@
 # 3. 實際點開每次搜尋的第 1、5、10 筆書目，確認對應書名及「推薦」按鈕可見。
 # 4. 六筆均符合才算成功；全程不點擊「推薦」按鈕、不送出推薦。
 
-"""網路書店推薦載入測試；驗證碼可手動輸入或透過 Gemini 辨識。"""
+"""網路書店推薦載入測試；驗證碼可手動輸入或透過 Tesseract 辨識。"""
 
 import argparse
 import json
@@ -17,11 +17,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from 館藏查詢 import CHINESE_WORDS, ENGLISH_WORDS
-from 關鍵字查詢 import REQUIRED_POSITIONS, open_page
-from 網頁載入 import get_with_retries
+from .館藏查詢 import CHINESE_WORDS, ENGLISH_WORDS
+from 圖書館.調用子程式.查詢共用 import REQUIRED_POSITIONS, open_page
+from 圖書館.調用子程式.網頁載入 import get_with_retries
 
-DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "測試帳號.local.json"
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "測試帳號.local.json"
 RECOMMEND_URL = "https://aulib.asia.edu.tw/webpac/recommend.cfm"
 BOOKSTORE_URL = "https://aulib.asia.edu.tw/webpac/recommend_book.cfm"
 BOOK_LINKS = "a.add-recommend[href='pop_recommend.cfm']"
@@ -111,7 +111,7 @@ def print_report(results: list[dict]) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description="登入後抽取中英文詞，檢查書目推薦按鈕載入；不送出推薦")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument("--captcha-mode", choices=("manual", "gemini"))
+    parser.add_argument("--captcha-mode", choices=("manual", "tesseract"))
     parser.add_argument("--seed", type=int)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--non-interactive", action="store_true", help="驗證碼失敗時直接回報，不等待人工輸入")
@@ -124,12 +124,10 @@ def main() -> int:
         sys.stdout.reconfigure(errors="replace")
     driver = None
     try:
-        from 帳號登入 import load_config, login
+        from 圖書館.調用子程式.帳號登入 import load_config, login, resolve_captcha_mode
 
         config = load_config(args.config)
-        mode = args.captcha_mode or config.get("captcha", {}).get("mode", "manual")
-        if mode not in ("manual", "gemini"):
-            raise RuntimeError("captcha.mode 必須是 manual 或 gemini")
+        mode = resolve_captcha_mode(config, args.captcha_mode)
         rng = random.Random(args.seed)
         selected = (("中文", rng.choice(CHINESE_WORDS)), ("英文", rng.choice(ENGLISH_WORDS)))
         print("抽中的詞：" + "、".join(f"{language} {word}" for language, word in selected), flush=True)

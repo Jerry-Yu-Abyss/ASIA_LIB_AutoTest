@@ -10,12 +10,14 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
+import schedule_tasks
+
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 RUNNER = ROOT / "run_and_notify.py"
 REPORT_DIR = ROOT / ".local" / "reports"
-SUITES = ("全部", "關鍵字查詢", "館藏查詢", "網路書店推薦", "新書輪播")
+SUITES = ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
@@ -41,8 +43,8 @@ class TestWindow:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("亞洲大學圖書館｜圖書館檢測")
-        self.root.geometry("860x620")
-        self.root.minsize(680, 460)
+        self.root.geometry("860x760")
+        self.root.minsize(680, 620)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.process: subprocess.Popen[str] | None = None
         self.running = False
@@ -79,6 +81,39 @@ class TestWindow:
         self.stop_button.pack(side="left")
         ttk.Button(buttons, text="開啟報告資料夾", command=self.open_reports).pack(side="right")
 
+        schedule = ttk.LabelFrame(frame, text="自動排程（Windows 工作排程器）", padding=10)
+        schedule.pack(fill="x", pady=(0, 12))
+        row = ttk.Frame(schedule)
+        row.pack(fill="x")
+        self.frequency = tk.StringVar(value="daily")
+        ttk.Radiobutton(row, text="每日", variable=self.frequency, value="daily",
+                        command=self.refresh_schedule).pack(side="left")
+        ttk.Radiobutton(row, text="每週", variable=self.frequency, value="weekly",
+                        command=self.refresh_schedule).pack(side="left", padx=(12, 0))
+        ttk.Label(row, text="時間（可填多個）").pack(side="left", padx=(20, 6))
+        self.times = tk.StringVar(value="09:00")
+        ttk.Entry(row, textvariable=self.times, width=24).pack(side="left")
+        ttk.Label(row, text="例如 09:00, 18:30").pack(side="left", padx=8)
+        day_row = ttk.Frame(schedule)
+        day_row.pack(fill="x", pady=(7, 0))
+        ttk.Label(day_row, text="星期").pack(side="left", padx=(0, 7))
+        self.days = [tk.BooleanVar(value=index == 0) for index in range(7)]
+        self.day_checks = []
+        for index, label in enumerate(schedule_tasks.LABELS):
+            check = ttk.Checkbutton(day_row, text=label, variable=self.days[index])
+            check.pack(side="left", padx=(0, 8))
+            self.day_checks.append(check)
+        action_row = ttk.Frame(schedule)
+        action_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(action_row, text="儲存／更新排程", command=self.save_schedule).pack(side="left")
+        ttk.Button(action_row, text="移除排程", command=self.remove_schedule).pack(side="left", padx=8)
+        self.schedule_status = tk.StringVar(value="尚未設定排程")
+        ttk.Label(action_row, textvariable=self.schedule_status).pack(side="left", padx=12)
+        ttk.Label(schedule, text="排程使用上方的檢測與 LINE 選項；電腦需開機且目前使用者已登入。"
+                  ).pack(anchor="w", pady=(7, 0))
+        self.refresh_schedule()
+        self.load_schedule()
+
         self.status = tk.StringVar(value="尚未開始")
         ttk.Label(frame, textvariable=self.status).pack(anchor="w", pady=(0, 6))
         self.log = scrolledtext.ScrolledText(frame, wrap="word", state="disabled", font=("Consolas", 10))
@@ -91,6 +126,54 @@ class TestWindow:
         self.log.insert("end", line)
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def refresh_schedule(self) -> None:
+        state = "normal" if self.frequency.get() == "weekly" else "disabled"
+        for check in self.day_checks:
+            check.configure(state=state)
+
+    def load_schedule(self) -> None:
+        try:
+            settings = schedule_tasks.load()
+            present = schedule_tasks.exists()
+        except (OSError, ValueError) as exc:
+            self.schedule_status.set(f"無法讀取排程：{exc}")
+            return
+        if settings:
+            self.frequency.set(settings["frequency"])
+            self.times.set(settings["times"])
+            for index, value in enumerate(self.days):
+                value.set(index in settings["days"])
+            self.suite.set(settings["suite"] if settings["suite"] in SUITES else "全部")
+            self.send_line.set(settings["send_line"])
+            self.broadcast.set(settings["broadcast"])
+            self.show_browser.set(settings["show_browser"])
+            self.refresh_schedule()
+        self.schedule_status.set("排程已啟用" if present else "尚未設定排程")
+
+    def save_schedule(self) -> None:
+        settings = {"frequency": self.frequency.get(), "times": self.times.get(),
+                    "days": [index for index, value in enumerate(self.days) if value.get()],
+                    "suite": self.suite.get(), "send_line": self.send_line.get(),
+                    "broadcast": self.broadcast.get(), "show_browser": self.show_browser.get()}
+        try:
+            settings = schedule_tasks.validate(settings)
+            command = build_command(settings["suite"], settings["send_line"],
+                                    settings["show_browser"], broadcast=settings["broadcast"])
+            schedule_tasks.save(settings, command)
+        except (OSError, ValueError, RuntimeError) as exc:
+            messagebox.showerror("無法儲存排程", str(exc))
+            return
+        self.schedule_status.set("排程已啟用")
+        messagebox.showinfo("排程已儲存", "Windows 工作排程器已建立或更新自動檢測。")
+
+    def remove_schedule(self) -> None:
+        try:
+            schedule_tasks.remove()
+        except (OSError, RuntimeError) as exc:
+            messagebox.showerror("無法移除排程", str(exc))
+            return
+        self.schedule_status.set("尚未設定排程")
 
     def start(self, line_test: bool = False) -> None:
         if self.running:

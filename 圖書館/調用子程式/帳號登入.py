@@ -5,16 +5,11 @@
 
 from __future__ import annotations
 
-import base64
+from collections.abc import Callable
 import json
-import os
 from pathlib import Path
-import random
 import re
-import time
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from selenium.common.exceptions import NoAlertPresentException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
@@ -22,19 +17,16 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 if __package__:
+    from .本機驗證碼 import recognize_tesseract, tesseract_command
     from .網頁載入 import get_with_retries
 else:
+    from 本機驗證碼 import recognize_tesseract, tesseract_command
     from 網頁載入 import get_with_retries
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "config" / "測試帳號.local.json"
-DEFAULT_MODEL = "gemini-flash-latest"
 LIBRARY_DOMAIN = "aulib.asia.edu.tw"
 MAX_CAPTCHA_ATTEMPTS = 5
-
-
-class GeminiTransientError(RuntimeError):
-    """Gemini 的暫時性錯誤，可在稍後更換驗證碼重試。"""
 
 
 class CaptchaImageTimeout(RuntimeError):
@@ -57,48 +49,14 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
     return config
 
 
-def recognize_captcha(png: bytes, settings: dict) -> str:
-    """以 Gemini 辨識驗證碼；只傳送驗證碼圖片，不傳送帳密。"""
-    api_key = os.environ.get("GEMINI_API_KEY") or settings.get("gemini_api_key", "")
-    if not api_key:
-        raise RuntimeError("缺少 Gemini API Key；請設定 GEMINI_API_KEY 或本機 JSON，或使用 manual 模式")
-    model = settings.get("gemini_model") or DEFAULT_MODEL
-    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", model):
-        raise RuntimeError("gemini_model 格式不正確")
-    body = {
-        "contents": [{"parts": [
-            {"text": "Read the letters and digits in this verification image. Preserve case. Return only the code, without explanation or formatting."},
-            {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(png).decode("ascii")}},
-        ]}],
-    }
-    request = Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=45) as response:
-            data = json.load(response)
-    except HTTPError as exc:
-        # 不輸出原始回應／請求，避免金鑰出現在錯誤報告。
-        if exc.code in (429, 500, 502, 503, 504):
-            raise GeminiTransientError(f"Gemini 暫時無法回應（HTTP {exc.code}）") from None
-        raise RuntimeError(f"Gemini 回傳 HTTP {exc.code}，請檢查金鑰、模型與配額") from None
-    except (URLError, TimeoutError):
-        raise GeminiTransientError("Gemini 辨識連線或回應失敗") from None
-    except ValueError:
-        raise RuntimeError("Gemini 回應格式不正確") from None
-    try:
-        answer = "".join(
-            part.get("text", "") for part in data["candidates"][0]["content"]["parts"]
-            if not part.get("thought", False)
-        ).strip()
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError("Gemini 沒有回傳可用的驗證碼") from None
-    if not re.fullmatch(r"[A-Za-z0-9]{3,10}", answer):
-        raise RuntimeError("Gemini 回傳格式不是英數驗證碼，未送出登入")
-    return answer
+def resolve_captcha_mode(config: dict, override: str | None = None) -> str:
+    """舊設定的 gemini 模式直接轉成本機辨識，不再呼叫外部模型。"""
+    mode = override or config.get("captcha", {}).get("mode", "tesseract")
+    if mode == "gemini":
+        mode = "tesseract"
+    if mode not in ("manual", "tesseract"):
+        raise RuntimeError("captcha.mode 必須是 manual 或 tesseract")
+    return mode
 
 
 def prompt_captcha(image, message: str = "") -> str:
@@ -164,40 +122,42 @@ def refresh_captcha(driver, image, target_url: str, config: dict):
         return open_login_form(driver, target_url, config)
 
 
-def login(driver, target_url: str, config: dict, mode: str = "manual", allow_manual_fallback: bool = True) -> None:
+def login(driver, target_url: str, config: dict, mode: str = "manual", allow_manual_fallback: bool = True,
+          diagnostic: Callable[[dict, bytes | None], None] | None = None) -> None:
     """在既有 Selenium 瀏覽器登入，成功後回到 ``target_url``。"""
-    if mode not in ("manual", "gemini"):
-        raise RuntimeError("captcha.mode 必須是 manual 或 gemini")
+    if mode not in ("manual", "tesseract"):
+        raise RuntimeError("captcha.mode 必須是 manual 或 tesseract")
     if mode == "manual" and not allow_manual_fallback:
-        raise RuntimeError("無人值守模式不可使用手動驗證碼；請改用 Gemini")
+        raise RuntimeError("無人值守模式不可使用手動驗證碼；請改用 Tesseract")
     parsed_target = urlparse(target_url)
     if parsed_target.scheme != "https" or parsed_target.netloc != LIBRARY_DOMAIN:
         raise RuntimeError("登入目標必須是亞洲大學圖書館的 HTTPS 網址")
+    if mode == "tesseract":
+        tesseract_command()
 
-    settings = config.get("captcha", {})
-    if mode == "gemini" and not (os.environ.get("GEMINI_API_KEY") or settings.get("gemini_api_key")):
-        raise RuntimeError("自動辨識需要 Gemini API Key；可改用 --captcha-mode manual")
     image = open_login_form(driver, target_url, config)
     for attempt in range(1, MAX_CAPTCHA_ATTEMPTS + 1):
-        if mode == "gemini":
-            print(f"正在辨識驗證碼（Gemini，第 {attempt}/{MAX_CAPTCHA_ATTEMPTS} 次）...", flush=True)
-            png = image.screenshot_as_png
+        answer_source = "manual"
+        png = image.screenshot_as_png if diagnostic or mode == "tesseract" else None
+        if diagnostic:
+            diagnostic({"attempt": attempt, "stage": "image_ready"}, png)
+        if mode == "tesseract":
+            print(f"正在辨識驗證碼（Tesseract，第 {attempt}/{MAX_CAPTCHA_ATTEMPTS} 次）...", flush=True)
             try:
-                answer = recognize_captcha(png, settings)
-                confirm_model = "gemini-3.5-flash"
-                if (settings.get("gemini_model") or DEFAULT_MODEL) == confirm_model:
-                    confirm_model = "gemini-3.5-flash-lite"
-                confirmation = recognize_captcha(png, {**settings, "gemini_model": confirm_model})
-                if answer != confirmation:
-                    raise RuntimeError(f"兩個模型辨識不同（{answer} / {confirmation}）")
+                answers = recognize_tesseract(png)
+                if diagnostic:
+                    diagnostic({"attempt": attempt, "stage": "recognition", "model": "Tesseract",
+                                "answers": answers}, None)
+                answer = next((candidate for candidate in answers
+                               if candidate and answers.count(candidate) >= 2), "")
+                if not answer:
+                    raise RuntimeError("Tesseract 三次辨識未能取得至少兩次一致的英數結果")
+                answer_source = "tesseract"
             except RuntimeError as exc:
+                if diagnostic:
+                    diagnostic({"attempt": attempt, "stage": "recognition_error", "reason": str(exc)}, None)
                 if attempt < MAX_CAPTCHA_ATTEMPTS:
-                    if isinstance(exc, GeminiTransientError):
-                        delay = min(2 ** (attempt - 1), 8) + random.uniform(0, 0.5)
-                        print(f"辨識未成功：{exc}；等待 {delay:.1f} 秒後更換驗證碼。", flush=True)
-                        time.sleep(delay)
-                    else:
-                        print(f"辨識未成功：{exc}；正在更換驗證碼。", flush=True)
+                    print(f"辨識未成功：{exc}；正在更換驗證碼。", flush=True)
                     image = refresh_captcha(driver, image, target_url, config)
                     continue
                 if not allow_manual_fallback:
@@ -206,7 +166,12 @@ def login(driver, target_url: str, config: dict, mode: str = "manual", allow_man
         else:
             answer = prompt_captcha(image)
         if not re.fullmatch(r"[A-Za-z0-9]{3,10}", answer):
+            if diagnostic:
+                diagnostic({"attempt": attempt, "stage": "invalid_answer", "answer": answer}, None)
             raise RuntimeError("驗證碼格式不正確，未送出登入")
+        if diagnostic:
+            diagnostic({"attempt": attempt, "stage": "submitted", "answer": answer,
+                        "source": answer_source}, None)
         driver.find_element(By.ID, "validateCode").send_keys(answer)
         driver.find_element(By.CSS_SELECTOR, "a[onclick*='submitForm']").click()
         try:
@@ -223,11 +188,24 @@ def login(driver, target_url: str, config: dict, mode: str = "manual", allow_man
             except NoAlertPresentException:
                 alert_text = ""
             if "驗證碼" in alert_text:
-                if mode == "gemini" and attempt < MAX_CAPTCHA_ATTEMPTS:
+                if diagnostic:
+                    diagnostic({"attempt": attempt, "stage": "rejected", "reason": "網站判定驗證碼錯誤"}, None)
+                if mode == "tesseract" and attempt < MAX_CAPTCHA_ATTEMPTS:
                     print("網站判定驗證碼錯誤；正在更換驗證碼重新登入。", flush=True)
                     image = open_login_form(driver, target_url, config)
                     continue
                 raise RuntimeError(f"網站判定驗證碼錯誤；已達 {attempt} 次上限") from None
+            if diagnostic:
+                diagnostic({"attempt": attempt, "stage": "login_error",
+                            "reason": alert_text[:120] or "未確認登入成功"}, None)
+            if mode == "tesseract" and attempt < MAX_CAPTCHA_ATTEMPTS and not any(
+                word in alert_text for word in ("帳號", "密碼", "停用", "鎖定")
+            ):
+                print("網站未確認登入成功；正在更換驗證碼重新登入。", flush=True)
+                image = open_login_form(driver, target_url, config)
+                continue
             raise RuntimeError("登入未成功，請確認帳密及網站狀態") from None
+        if diagnostic:
+            diagnostic({"attempt": attempt, "stage": "accepted"}, None)
         print("[PASS] 測試帳號已登入", flush=True)
         return

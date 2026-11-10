@@ -56,7 +56,7 @@ Write-Host '正在安裝專案套件...'
 & $venvPython -m pip install -r $requirements
 Assert-LastCommandSucceeded '安裝套件'
 
-& $venvPython -c 'import selenium, webdriver_manager, requests, lxml, openpyxl'
+& $venvPython -c 'import selenium, webdriver_manager, requests, lxml, openpyxl, PIL'
 Assert-LastCommandSucceeded '檢查套件'
 
 if (-not (Test-Path -LiteralPath $localConfig -PathType Leaf)) {
@@ -83,6 +83,18 @@ if (@($chromePaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).
     Write-Warning '未在常見位置找到 Google Chrome；執行網頁測試前請確認已安裝 Chrome。'
 }
 
+$tesseractPaths = @()
+foreach ($basePath in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if ($basePath) {
+        $tesseractPaths += Join-Path $basePath 'Tesseract-OCR\tesseract.exe'
+    }
+}
+if (-not (Get-Command tesseract -ErrorAction SilentlyContinue) -and
+    @($tesseractPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq 0 -and
+    -not ($env:TESSERACT_CMD -and (Test-Path -LiteralPath $env:TESSERACT_CMD -PathType Leaf))) {
+    Write-Warning '未找到 Tesseract；自動辨識驗證碼需要安裝 Tesseract。可執行 winget install --id UB-Mannheim.TesseractOCR --exact 安裝。'
+}
+
 Write-Host '環境安裝完成。可執行：'
-Write-Host '.\.venv\Scripts\python.exe ".\圖書館\網路書店推薦.py"'
+Write-Host '.\.venv\Scripts\python.exe -m 圖書館.檢測功能.網路書店推薦'
 Write-Host '首次執行時 ChromeDriver 可能需要連網下載。'

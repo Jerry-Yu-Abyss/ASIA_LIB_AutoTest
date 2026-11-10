@@ -25,10 +25,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import WebDriverException
 from webdriver_manager.chrome import ChromeDriverManager
 
-if __package__:
-    from .網頁載入 import ConnectionTimeout, get_with_retries
-else:
-    from 網頁載入 import ConnectionTimeout, get_with_retries
+from 圖書館.調用子程式.網頁載入 import ConnectionTimeout, get_with_retries
 
 TARGET_URL = "https://aulib.asia.edu.tw/webpac/search.cfm"
 PLACEHOLDER = "templates/img/product_img.jpg"

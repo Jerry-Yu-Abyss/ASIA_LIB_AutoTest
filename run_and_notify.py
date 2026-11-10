@@ -24,12 +24,12 @@ LIMIT = 5000
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 EMOJI_PATTERN = re.compile(r"[\U0001F000-\U0001FAFF\u2300-\u23FF\u2600-\u27BF\ufe0f\u200d\u20e3]")
 SUITES = (
-    ("關鍵字查詢", "關鍵字查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
     ("館藏查詢", "館藏查詢.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
     ("網路書店推薦", "網路書店推薦.py", "https://aulib.asia.edu.tw/webpac/recommend_book.cfm"),
+    ("我的書房", "我的書房.py", "https://aulib.asia.edu.tw/webpac/shelf_user.cfm"),
     ("新書輪播", "新書輪播.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
 )
-SUITE_RUNTIME_LIMITS = {"關鍵字查詢": 480, "館藏查詢": 240, "網路書店推薦": 480, "新書輪播": 180}
+SUITE_RUNTIME_LIMITS = {"館藏查詢": 240, "網路書店推薦": 480, "我的書房": 300, "新書輪播": 180}
 
 def load_line_config(path: Path = LINE_CONFIG, *, broadcast: bool = False) -> tuple[str, str | None]:
     settings = {}
@@ -92,10 +92,7 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        if name == "關鍵字查詢":
-            label, passed = item.get("keyword", "未知關鍵字"), bool(item.get("success"))
-            reason, books = item.get("reason", ""), item.get("books", {})
-        elif name == "館藏查詢":
+        if name == "館藏查詢":
             label = f"{item.get('language', '')} {item.get('word', '')}"
             reason, books = "；".join(item.get("errors") or []), item.get("books", {})
             passed = not reason and all(
@@ -110,12 +107,15 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
                     f"第 {book.get('position', '?')} 筆：{book.get('reason') or '推薦按鈕未載入'}"
                     for book in books if not book.get("loaded")
                 ) or "推薦書目未完整載入"
+        elif name == "我的書房":
+            label, passed = "登入與我的書房", bool(item.get("success"))
+            reason, books = item.get("reason", ""), []
         else:
             label = f"{item.get('section', '')} {item.get('name', '未知書名')}"
             reason, books, passed = item.get("reason", ""), [], bool(item.get("success"))
         case = {"suite": name, "name": short(label, 65), "passed": passed,
                 "reason": short(reason, 120), "url": safe_url(item.get("url"), fallback)}
-        if name != "新書輪播":
+        if name in ("館藏查詢", "網路書店推薦"):
             case["books"] = []
             for position in (1, 5, 10):
                 book = books.get(str(position), {}) if isinstance(books, dict) else next(
@@ -138,12 +138,13 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
     stem = f"{stamp}_{Path(script).stem}"
     report = REPORT_DIR / f"{stem}.json"
     log = REPORT_DIR / f"{stem}.log"
-    cmd = [sys.executable, "-u", str(ROOT / "圖書館" / script),
+    module = f"圖書館.檢測功能.{Path(script).stem}"
+    cmd = [sys.executable, "-u", "-m", module,
            "--report-json", str(report), "--non-interactive"]
     if headless:
         cmd.append("--headless")
-    if script == "網路書店推薦.py":
-        cmd += ["--captcha-mode", "gemini", "--timeout", str(timeout)]
+    if script in ("網路書店推薦.py", "我的書房.py"):
+        cmd += ["--captcha-mode", "tesseract", "--timeout", str(timeout)]
     if seed is not None and script in ("館藏查詢.py", "網路書店推薦.py"):
         cmd += ["--seed", str(seed)]
     env = os.environ.copy()
@@ -222,7 +223,7 @@ def detail_message(title: str, cases: list[dict]) -> str:
         if case.get("books"):
             for book in case["books"]:
                 book_name = line_text(book.get("name") or "未取得")
-                if case["suite"] in ("關鍵字查詢", "館藏查詢"):
+                if case["suite"] == "館藏查詢":
                     failed_book = not book.get("opened")
                 else:
                     failed_book = not book.get("loaded") or bool(book["reason"])
@@ -246,7 +247,7 @@ def build_messages(runs: list[dict], when: datetime) -> list[str]:
     if new_book_passed:
         passed = [case for case in passed if case["suite"] != "新書輪播"]
         passed.append({"suite": "新書輪播", "name": f"{len(new_book_passed)} 筆封面正常（逐筆資料見本機 JSON）",
-                       "passed": True, "reason": "", "url": SUITES[3][2]})
+                       "passed": True, "reason": "", "url": next(s[2] for s in SUITES if s[0] == "新書輪播")})
     failed_suites = [run["name"] for run in runs if run["code"] != 0 or any(not c["passed"] for c in run["cases"])]
     summary = "\n".join([
         "圖書館｜(1/3)測試摘要",
@@ -292,7 +293,7 @@ def main() -> int:
         selected_suites = [suite for suite in SUITES if args.only is None or suite[0] == args.only]
         for suite in selected_suites:
             runtime_limit = args.max_runtime or max(
-                SUITE_RUNTIME_LIMITS[suite[0]], 2 * args.timeout + 120 if suite[0] == "網路書店推薦" else 0
+                SUITE_RUNTIME_LIMITS[suite[0]], 2 * args.timeout + 120 if suite[0] in ("網路書店推薦", "我的書房") else 0
             )
             print(f"正在執行：{suite[0]}（最多 {runtime_limit} 秒）...", flush=True)
             code, cases, log = run_suite(suite, args.seed, args.timeout, runtime_limit, stamp, args.headless)

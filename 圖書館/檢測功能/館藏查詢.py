@@ -15,7 +15,7 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
-from 關鍵字查詢 import (
+from 圖書館.調用子程式.查詢共用 import (
     REQUIRED_POSITIONS,
     RESULT_TITLE_SELECTOR,
     TARGET_URL,
@@ -24,7 +24,7 @@ from 關鍵字查詢 import (
     print_book_indices,
     show_more_results,
 )
-from 網頁載入 import get_with_retries
+from 圖書館.調用子程式.網頁載入 import get_with_retries
 
 CHINESE_WORDS = (
     "心理", "設計", "管理", "科技", "藝術",
