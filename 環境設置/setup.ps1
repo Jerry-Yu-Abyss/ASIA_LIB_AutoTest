@@ -19,8 +19,8 @@ function Assert-LastCommandSucceeded([string]$description) {
 
 function Find-Python {
     if ($env:PROJECT_PYTHON -and (Test-Path -LiteralPath $env:PROJECT_PYTHON -PathType Leaf)) {
-        & $env:PROJECT_PYTHON -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
-        if ($LASTEXITCODE -eq 0) {
+        $path = & $env:PROJECT_PYTHON -c 'import sys; print(sys.executable) if sys.version_info >= (3, 10) else sys.exit(1)' 2>$null
+        if ($LASTEXITCODE -eq 0 -and $path -notmatch '(?i)[\\/]WindowsApps[\\/]') {
             return @{ Name = $env:PROJECT_PYTHON; Args = @() }
         }
     }
@@ -33,15 +33,15 @@ function Find-Python {
         if ($null -eq $command) { continue }
         try {
             $arguments = @($candidate.Args)
-            & $command.Source @arguments -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
-            if ($LASTEXITCODE -eq 0) {
+            $path = & $command.Source @arguments -c 'import sys; print(sys.executable) if sys.version_info >= (3, 10) else sys.exit(1)' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $path -notmatch '(?i)[\\/]WindowsApps[\\/]') {
                 return $candidate
             }
         } catch {
             continue
         }
     }
-    throw '找不到 Python 3.10 以上版本。請先安裝 Python，重新開啟 PowerShell 後再執行。'
+    throw '找不到可用的標準 Python 3.10 以上版本。若目前是 Microsoft Store 版 Python，請執行「一鍵安裝.cmd」安裝標準 Python。'
 }
 
 function Test-CurrentVenv {
@@ -83,6 +83,7 @@ if ($rebuild -and (Test-Path -LiteralPath $venvPath)) {
 try {
     if ($rebuild) {
         $python = Find-Python
+        Write-Host "建立環境所用 Python：$($python.Name)"
         Write-Host '正在建立專案專用的 Python 環境...'
         $arguments = @($python.Args)
         & $python.Name @arguments -m venv $venvPath

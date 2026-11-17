@@ -22,7 +22,9 @@ function Find-PythonExecutable {
         try {
             $arguments = @($candidate.Args)
             $result = & $candidate.Name @arguments -c 'import sys; print(sys.executable) if sys.version_info >= (3, 10) else sys.exit(1)' 2>$null
-            if ($LASTEXITCODE -eq 0 -and $result -and (Test-Path -LiteralPath $result -PathType Leaf)) {
+            if ($LASTEXITCODE -eq 0 -and $result -and
+                $result -notmatch '(?i)[\\/]WindowsApps[\\/]' -and
+                (Test-Path -LiteralPath $result -PathType Leaf)) {
                 return [string]$result
             }
         } catch { }
@@ -58,10 +60,12 @@ function Install-Package([string]$name, [string]$id) {
 
 $python = Find-PythonExecutable
 if (-not $python) {
+    Write-Output '未找到可用的標準 Python；將安裝 Python 3.13。'
     Install-Package 'Python' 'Python.Python.3.13'
     if (-not $DryRun) { $python = Find-PythonExecutable }
 }
 if (-not $python -and -not $DryRun) { throw '已執行 Python 安裝，但找不到 Python 3.10 以上。請檢查安裝結果後重試。' }
+if ($python) { Write-Output "選用 Python：$python" }
 
 if (-not (Find-Chrome)) {
     Install-Package 'Google Chrome' 'Google.Chrome'

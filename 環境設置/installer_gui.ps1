@@ -34,8 +34,8 @@ function Has-Python {
         try {
             $arguments = @()
             if ($candidate.Count -gt 1) { $arguments += $candidate[1] }
-            & $candidate[0] @arguments -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
-            if ($LASTEXITCODE -eq 0) { return $true }
+            $path = & $candidate[0] @arguments -c 'import sys; print(sys.executable) if sys.version_info >= (3, 10) else sys.exit(1)' 2>$null
+            if ($LASTEXITCODE -eq 0 -and $path -notmatch '(?i)[\\/]WindowsApps[\\/]') { return $true }
         } catch { }
     }
     return $false
