@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 RUNNER = ROOT / "LINE通知" / "run_and_notify.py"
 REPORT_DIR = ROOT / ".local" / "reports"
-SUITES = ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播")
+SUITES = ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播", "電子資源")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

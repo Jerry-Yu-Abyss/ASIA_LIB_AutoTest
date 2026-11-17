@@ -1,6 +1,6 @@
 # 亞洲大學圖書館系統自動測試
 
-這個專案使用 Chrome 自動檢查館藏查詢、網路書店推薦、我的書房與新書輪播。可以手動執行、傳送 LINE 結果，或在 Windows 設定自動排程。
+這個專案使用 Chrome 自動檢查館藏查詢、網路書店推薦、我的書房、新書輪播與電子資源登入。可以手動執行、傳送 LINE 結果，或在 Windows 設定自動排程。
 
 ## 新電腦安裝
 
@@ -27,6 +27,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\install_a
 - **自動排程**：在檢測視窗設定每日或每週的時間後，按「儲存／更新排程」。換電腦需重新儲存排程；操作說明見 [`排程設置/README.md`](排程設置/README.md)。
 - **命令列執行全部測試**：`.\.venv\Scripts\python.exe .\LINE通知\run_and_notify.py`；不傳 LINE 時加 `--no-line`，背景執行時加 `--headless`。LINE 設定與回報方式見 [`LINE通知/README.md`](LINE通知/README.md)。
 - **報告**：每次檢測的日誌與 JSON 報告存於 `.local/reports/`。
+- **電子資源登入**：檢測視窗選擇「電子資源」，或以 `python -m 電子資源.登入檢測` 單獨執行。沿用 `config/測試帳號.local.json`；若頁面出現驗證碼欄位，會依設定以 Tesseract 辨識。排程可選擇此項目。
 - **分類號抓取工具**：參閱 [`個人化書單分類號抓取/README.md`](個人化書單分類號抓取/README.md)。
 
 帳號與 LINE 設定只保存在本機的 `config/*.local.json`，請勿公開分享。LINE 群發會傳給官方帳號的所有可接收訊息好友，請在檢測視窗明確勾選後使用。
@@ -58,6 +59,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\環境設置\install_a
 │  ├─ 環境檢查.py              判斷環境是否屬於目前電腦與位置
 │  ├─ 檢測功能/                各項獨立檢測
 │  └─ 調用子程式/              登入、驗證碼與網頁共用功能
+├─ 電子資源/                   電子資源登入獨立檢測
 ├─ 個人化書單分類號抓取/     獨立的書單工具及說明
 ├─ tests/                      程式測試
 ├─ .venv/                      每台電腦各自建立；不納入版本庫

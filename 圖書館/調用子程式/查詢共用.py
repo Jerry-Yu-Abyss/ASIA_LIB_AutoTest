@@ -52,7 +52,7 @@ def print_book_indices(driver: webdriver.Chrome) -> list[int]:
     return indices
 
 
-def open_page(headless: bool = False) -> webdriver.Chrome:
+def open_page(headless: bool = False, target_url: str = TARGET_URL) -> webdriver.Chrome:
     options = Options()
     if headless:
         options.add_argument("--headless=new")
@@ -68,10 +68,10 @@ def open_page(headless: bool = False) -> webdriver.Chrome:
     )
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    print(f"[+] 正在開啟頁面：{TARGET_URL}")
+    print(f"[+] 正在開啟頁面：{target_url}")
     driver.set_page_load_timeout(45)
     try:
-        get_with_retries(driver, TARGET_URL)
+        get_with_retries(driver, target_url)
     except ConnectionTimeout:
         driver.quit()
         raise

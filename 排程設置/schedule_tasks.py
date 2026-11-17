@@ -51,7 +51,7 @@ def validate(settings: dict) -> dict:
     days = sorted(set(days))
     if settings["frequency"] == "weekly" and not days:
         raise ValueError("每週排程請至少選擇一天")
-    if settings.get("suite") not in ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播"):
+    if settings.get("suite") not in ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播", "電子資源"):
         raise ValueError("檢測項目不正確")
     return {"frequency": settings["frequency"], "times": ", ".join(times), "days": days,
             "suite": settings["suite"], "send_line": bool(settings.get("send_line")),
