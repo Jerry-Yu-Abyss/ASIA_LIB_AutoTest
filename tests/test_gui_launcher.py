@@ -30,6 +30,12 @@ class GuiCommandTests(unittest.TestCase):
         self.assertIn("--no-line", command)
         self.assertIn("--headless", command)
 
+    def test_electronic_resource_selection_and_all_checkbox_command(self):
+        self.assertEqual(gui.FUNCTIONS["電子資源"][0], "電子資源列表")
+        self.assertEqual(gui.build_command("電子資源列表", False, True)[-3:],
+                         ["--only", "電子資源列表", "--no-line"])
+        self.assertNotIn("--only", gui.build_command("全部", False, True))
+
     def test_line_connection_button_only_sends_test(self):
         command = gui.build_command("全部", send_line=False, show_browser=False, line_test=True)
         self.assertEqual(command[-1], "--send-test")

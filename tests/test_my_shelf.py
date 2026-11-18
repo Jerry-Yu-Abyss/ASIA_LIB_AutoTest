@@ -14,7 +14,8 @@ from LINE通知 import run_and_notify as notify
 class ShelfTests(unittest.TestCase):
     def test_shelf_runs_after_bookstore_with_automatic_captcha(self):
         names = [suite[0] for suite in notify.SUITES]
-        self.assertEqual(names, ["館藏查詢", "網路書店推薦", "我的書房", "新書輪播", "電子資源"])
+        self.assertEqual(names, ["館藏查詢", "網路書店推薦", "我的書房", "新書輪播",
+                                 "電子資源列表", "電子資源登入"])
         from contextlib import redirect_stdout
         from io import StringIO
         import tempfile

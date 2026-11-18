@@ -28,9 +28,11 @@ SUITES = (
     ("網路書店推薦", "網路書店推薦.py", "https://aulib.asia.edu.tw/webpac/recommend_book.cfm"),
     ("我的書房", "我的書房.py", "https://aulib.asia.edu.tw/webpac/shelf_user.cfm"),
     ("新書輪播", "新書輪播.py", "https://aulib.asia.edu.tw/webpac/search.cfm"),
-    ("電子資源", "登入檢測.py", "https://erm.asia.edu.tw/user/login/"),
+    ("電子資源列表", "列表檢測.py", "https://erm.asia.edu.tw/user/login/"),
+    ("電子資源登入", "登入檢測.py", "https://erm.asia.edu.tw/user/login/"),
 )
-SUITE_RUNTIME_LIMITS = {"館藏查詢": 240, "網路書店推薦": 480, "我的書房": 300, "新書輪播": 180, "電子資源": 300}
+SUITE_RUNTIME_LIMITS = {"館藏查詢": 240, "網路書店推薦": 480, "我的書房": 300, "新書輪播": 180,
+                        "電子資源列表": 1200, "電子資源登入": 300}
 
 def load_line_config(path: Path = LINE_CONFIG, *, broadcast: bool = False) -> tuple[str, str | None]:
     settings = {}
@@ -108,9 +110,13 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
                     f"第 {book.get('position', '?')} 筆：{book.get('reason') or '推薦按鈕未載入'}"
                     for book in books if not book.get("loaded")
                 ) or "推薦書目未完整載入"
-        elif name in ("我的書房", "電子資源"):
+        elif name in ("我的書房", "電子資源登入"):
             label, passed = ("登入與我的書房" if name == "我的書房" else "電子資源登入"), bool(item.get("success"))
             reason, books = item.get("reason", ""), []
+        elif name == "電子資源列表":
+            label = f"{item.get('category', '')} 第 {item.get('position', '?')} 筆 {item.get('name', '')}"
+            passed = bool(item.get("success"))
+            reason, books = item.get("reason") or f"連線：{item.get('status', '未取得狀態')}", []
         else:
             label = f"{item.get('section', '')} {item.get('name', '未知書名')}"
             reason, books, passed = item.get("reason", ""), [], bool(item.get("success"))
@@ -139,12 +145,12 @@ def run_suite(suite: tuple[str, str, str], seed: int | None, timeout: int,
     stem = f"{stamp}_{Path(script).stem}"
     report = REPORT_DIR / f"{stem}.json"
     log = REPORT_DIR / f"{stem}.log"
-    module = f"{'電子資源' if name == '電子資源' else '圖書館.檢測功能'}.{Path(script).stem}"
+    module = f"{'電子資源' if name.startswith('電子資源') else '圖書館.檢測功能'}.{Path(script).stem}"
     cmd = [sys.executable, "-u", "-m", module,
            "--report-json", str(report), "--non-interactive"]
     if headless:
         cmd.append("--headless")
-    if name in ("網路書店推薦", "我的書房", "電子資源"):
+    if name in ("網路書店推薦", "我的書房", "電子資源列表", "電子資源登入"):
         cmd += ["--captcha-mode", "tesseract", "--timeout", str(timeout)]
     if seed is not None and script in ("館藏查詢.py", "網路書店推薦.py"):
         cmd += ["--seed", str(seed)]
@@ -274,7 +280,7 @@ def main() -> int:
     parser.add_argument("--max-runtime", type=int, help="覆寫每項測試上限秒數；未指定時依項目設定")
     parser.add_argument("--headless", action="store_true", help="背景執行 Chrome；預設顯示瀏覽器")
     parser.add_argument("--only", choices=[suite[0] for suite in SUITES],
-                        help="只執行指定測試並回報 LINE；未指定時執行全部四項")
+                        help="只執行指定測試並回報 LINE；未指定時執行全部項目")
     args = parser.parse_args()
     if args.timeout < 30 or (args.max_runtime is not None and args.max_runtime < args.timeout):
         parser.error("--timeout 至少 30 秒，--max-runtime 不得小於 --timeout")
@@ -294,7 +300,8 @@ def main() -> int:
         selected_suites = [suite for suite in SUITES if args.only is None or suite[0] == args.only]
         for suite in selected_suites:
             runtime_limit = args.max_runtime or max(
-                SUITE_RUNTIME_LIMITS[suite[0]], 2 * args.timeout + 120 if suite[0] in ("網路書店推薦", "我的書房", "電子資源") else 0
+                SUITE_RUNTIME_LIMITS[suite[0]], 2 * args.timeout + 120 if suite[0] in
+                ("網路書店推薦", "我的書房", "電子資源列表", "電子資源登入") else 0
             )
             print(f"正在執行：{suite[0]}（最多 {runtime_limit} 秒）...", flush=True)
             code, cases, log = run_suite(suite, args.seed, args.timeout, runtime_limit, stamp, args.headless)

@@ -39,6 +39,15 @@ class ScheduleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             schedule.validate({"frequency": "weekly", "times": "09:00", "days": [], "suite": "全部"})
 
+    def test_legacy_all_and_electronic_schedules_migrate(self):
+        base = {"frequency": "daily", "times": "09:00", "days": [], "send_line": False}
+        all_settings = schedule.validate({**base, "suite": "全部"})
+        self.assertTrue(all_settings["run_all"])
+        self.assertEqual(all_settings["suite"], "館藏查詢")
+        electronic = schedule.validate({**base, "suite": "電子資源"})
+        self.assertFalse(electronic["run_all"])
+        self.assertEqual(electronic["suite"], "電子資源登入")
+
 
 if __name__ == "__main__":
     unittest.main()

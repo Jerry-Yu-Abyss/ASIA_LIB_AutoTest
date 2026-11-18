@@ -37,8 +37,8 @@ class ElectronicResourcesTests(unittest.TestCase):
 
     def test_report_and_url_use_electronic_resource_suite(self):
         suite = notify.SUITES[-1]
-        self.assertEqual(suite[0], "電子資源")
-        cases = notify.normalize("電子資源", [{"success": True, "url": "https://erm.asia.edu.tw/user/profile/"}], 0, suite[2])
+        self.assertEqual(suite[0], "電子資源登入")
+        cases = notify.normalize("電子資源登入", [{"success": True, "url": "https://erm.asia.edu.tw/user/profile/"}], 0, suite[2])
         self.assertTrue(cases[0]["passed"])
         self.assertEqual(cases[0]["url"], "https://erm.asia.edu.tw/user/profile/")
         self.assertEqual(notify.safe_url("https://example.org/", suite[2]), suite[2])

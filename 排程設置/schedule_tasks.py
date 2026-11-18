@@ -51,10 +51,16 @@ def validate(settings: dict) -> dict:
     days = sorted(set(days))
     if settings["frequency"] == "weekly" and not days:
         raise ValueError("每週排程請至少選擇一天")
-    if settings.get("suite") not in ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播", "電子資源"):
+    suites = ("全部", "館藏查詢", "網路書店推薦", "我的書房", "新書輪播",
+              "電子資源", "電子資源列表", "電子資源登入")
+    if settings.get("suite") not in suites:
         raise ValueError("檢測項目不正確")
+    old_suite = settings["suite"]
+    suite = "電子資源登入" if old_suite == "電子資源" else (
+        "館藏查詢" if old_suite == "全部" else old_suite)
+    run_all = bool(settings.get("run_all", old_suite == "全部"))
     return {"frequency": settings["frequency"], "times": ", ".join(times), "days": days,
-            "suite": settings["suite"], "send_line": bool(settings.get("send_line")),
+            "suite": suite, "run_all": run_all, "send_line": bool(settings.get("send_line")),
             "broadcast": bool(settings.get("broadcast")), "show_browser": bool(settings.get("show_browser"))}
 
 

@@ -52,7 +52,7 @@ class LineRunnerTests(unittest.TestCase):
     def test_runnable_scripts_include_electronic_resources(self):
         self.assertEqual(
             [script for _, script, _ in notify.SUITES],
-            ["館藏查詢.py", "網路書店推薦.py", "我的書房.py", "新書輪播.py", "登入檢測.py"],
+            ["館藏查詢.py", "網路書店推薦.py", "我的書房.py", "新書輪播.py", "列表檢測.py", "登入檢測.py"],
         )
 
     def test_only_one_suite_still_sends_three_line_messages(self):
@@ -158,7 +158,7 @@ class LineRunnerTests(unittest.TestCase):
             (root / "電子資源").mkdir()
             (root / "電子資源" / "__init__.py").write_text("", encoding="utf-8")
             for _, script, _ in notify.SUITES:
-                folder = root / "電子資源" if script == "登入檢測.py" else scripts
+                folder = root / "電子資源" if script in ("登入檢測.py", "列表檢測.py") else scripts
                 (folder / script).write_text("import sys\nprint('PROGRESS', flush=True)\nprint(' '.join(sys.argv), flush=True)\n", encoding="utf-8")
             with patch.object(notify, "ROOT", root), patch.object(notify, "REPORT_DIR", root):
                 for suite in notify.SUITES:
@@ -216,12 +216,12 @@ class LineRunnerTests(unittest.TestCase):
                 for suite in notify.SUITES
             ]
             self.assertEqual(notify.main(), 1)
-            self.assertEqual(run.call_count, 5)
+            self.assertEqual(run.call_count, 6)
             self.assertEqual([call.args[3] for call in run.call_args_list],
-                             [240, 480, 480, 180, 480])
+                             [240, 480, 480, 180, 1200, 480])
             combined = list(Path(directory).glob("*_完整報告.json"))
             self.assertEqual(len(combined), 1)
-            self.assertEqual(len(json.loads(combined[0].read_text(encoding="utf-8"))), 5)
+            self.assertEqual(len(json.loads(combined[0].read_text(encoding="utf-8"))), 6)
 
     def test_bad_line_config_still_keeps_complete_local_report(self):
         with tempfile.TemporaryDirectory() as directory, \
@@ -237,7 +237,7 @@ class LineRunnerTests(unittest.TestCase):
                 for suite in notify.SUITES
             ]
             self.assertEqual(notify.main(), 2)
-            self.assertEqual(run.call_count, 5)
+            self.assertEqual(run.call_count, 6)
             self.assertEqual(len(list(Path(directory).glob("*_完整報告.json"))), 1)
 
     def test_bookstore_failure_reports_failed_book_reason(self):
@@ -352,7 +352,7 @@ class LineRunnerTests(unittest.TestCase):
                 for suite in notify.SUITES]
         summary = notify.build_messages(runs, datetime(2026, 11, 9, 8, 36, tzinfo=timezone.utc))[0]
         self.assertEqual(summary, "圖書館｜(1/3)測試摘要\n時間：2026-11-09 16:36 台北標準時間\n"
-                                  "整體：5/5 項通過\n未通過：無")
+                                  "整體：6/6 項通過\n未通過：無")
 
     def test_opened_book_passes_and_omits_legacy_classification(self):
         cases = notify.normalize("館藏查詢", [{
