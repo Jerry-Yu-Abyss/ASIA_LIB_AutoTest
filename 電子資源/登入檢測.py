@@ -110,8 +110,8 @@ def submit_login(driver, config: dict, mode: str, allow_manual_fallback: bool,
                     if not allow_manual_fallback:
                         raise RuntimeError("驗證碼多次辨識未一致，未送出登入")
                     answer = captcha_prompt(image, "自動辨識未成功，請手動確認驗證碼。")
-            if not re.fullmatch(r"[A-Za-z0-9]{3,10}", answer):
-                raise RuntimeError("驗證碼格式不正確，未送出登入")
+            if not re.fullmatch(r"[0-9]{4}", answer):
+                raise RuntimeError("電子資源驗證碼需為 4 位半形數字，未送出登入")
             field.clear()
             field.send_keys(answer)
         buttons = form.find_elements(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")

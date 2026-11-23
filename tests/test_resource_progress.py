@@ -128,7 +128,7 @@ class ResourceProgressTests(unittest.TestCase):
             進度.set_completed(data, "資料庫", 60, path)
             output = []
             driver = Mock(current_url="https://erm.asia.edu.tw/er/browse/")
-            with patch.object(listing, "prepare"), patch.object(listing, "configured", return_value=True), \
+            with patch.object(listing, "prepare", return_value=200), patch.object(listing, "configured", return_value=True), \
                  patch.object(listing, "item_at", side_effect=lambda _, pos: (Mock(), f"書目{pos}", f"{pos:064x}")), \
                   patch.object(listing, "check_connection", return_value={
                       "success": True, "status": "HTTP 200", "connection_url": "https://vendor.example/"}):
@@ -142,7 +142,7 @@ class ResourceProgressTests(unittest.TestCase):
             path = Path(directory) / "progress.json"
             data = 進度.initial()
             進度.advance(data, "電子書", 1, "a" * 64, path)
-            with patch.object(listing, "prepare"), patch.object(listing, "item_at", return_value=(Mock(), "改名", "b" * 64)):
+            with patch.object(listing, "prepare", return_value=200), patch.object(listing, "item_at", return_value=(Mock(), "改名", "b" * 64)):
                 with self.assertRaisesRegex(RuntimeError, "檢查點不同"):
                     listing.check_category(Mock(), "電子書", data, [], path)
             self.assertEqual(進度.load(path)["categories"]["電子書"]["last_completed"], 1)
@@ -152,7 +152,7 @@ class ResourceProgressTests(unittest.TestCase):
             path = Path(directory) / "progress.json"
             data = 進度.initial()
             output = []
-            with patch.object(listing, "prepare"), patch.object(listing, "configured", return_value=True), \
+            with patch.object(listing, "prepare", return_value=200), patch.object(listing, "configured", return_value=True), \
                   patch.object(listing, "item_at", return_value=(Mock(), "入口未找到", "a" * 64)), \
                   patch.object(listing, "check_connection", side_effect=RuntimeError("找不到資源入口")):
                 listing.check_category(Mock(current_url="https://erm.asia.edu.tw/er/browse/"),
@@ -170,7 +170,7 @@ class ResourceProgressTests(unittest.TestCase):
             outcomes = [{"success": False, "status": "HTTP 404", "connection_url": "https://vendor.example/missing"}]
             outcomes.extend({"success": True, "status": "HTTP 200", "connection_url": "https://vendor.example/"}
                             for _ in range(4))
-            with patch.object(listing, "prepare"), patch.object(listing, "configured", return_value=True), \
+            with patch.object(listing, "prepare", return_value=200), patch.object(listing, "configured", return_value=True), \
                  patch.object(listing, "item_at", side_effect=lambda _, pos: (Mock(), f"條目{pos}", f"{pos:064x}")), \
                  patch.object(listing, "check_connection", side_effect=outcomes):
                 listing.check_category(Mock(current_url="https://erm.asia.edu.tw/er/browse/"),
@@ -189,7 +189,7 @@ class ResourceProgressTests(unittest.TestCase):
             data = 進度.initial()
             進度.set_completed(data, "電子期刊", 100, path)
             output = []
-            with patch.object(listing, "prepare"), patch.object(listing, "configured", return_value=True), \
+            with patch.object(listing, "prepare", return_value=200), patch.object(listing, "configured", return_value=True), \
                  patch.object(listing, "go_to_page") as next_page, \
                  patch.object(listing, "item_at", side_effect=lambda _, pos: (Mock(), f"條目{pos}", f"{pos:064x}")), \
                   patch.object(listing, "check_connection", return_value={
@@ -209,6 +209,38 @@ class ResourceProgressTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "不連續"):
                 進度.advance(data, "網路資源", 3, "c" * 64, path)
             self.assertEqual(path.read_text(encoding="utf-8"), "{broken")
+
+    def test_circular_batches_resume_from_saved_position(self):
+        scenarios = [
+            (3, 0, [[1, 2, 3, 1, 2], [3, 1, 2, 3, 1]]),
+            (1, 0, [[1, 1, 1, 1, 1]]),
+            (103, 101, [[102, 103, 1, 2, 3]]),
+            (5, 0, [[1, 2, 3, 4, 5], [1, 2, 3, 4, 5]]),
+        ]
+        for total, last, batches in scenarios:
+            with self.subTest(total=total), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "progress.json"
+                category = "網路資源"
+                進度.set_completed(進度.initial(), category, last, path)
+                driver = Mock(current_url="https://erm.asia.edu.tw/er/browse/ir/")
+                with patch.object(listing, "prepare", return_value=total), \
+                     patch.object(listing, "configured", return_value=True), \
+                     patch.object(listing, "go_to_page") as navigate, \
+                     patch.object(listing, "item_at", side_effect=lambda _, p: (p, str(p), f"{p:064x}")), \
+                     patch.object(listing, "check_connection", return_value={
+                         "success": True, "status": "HTTP 200", "connection_url": "https://vendor.example/"
+                     }) as check:
+                    for expected in batches:
+                        output = []
+                        listing.check_category(driver, category, 進度.load(path), output, path)
+                        self.assertEqual([case["position"] for case in output], expected)
+                        self.assertEqual([c.args[1] for c in check.call_args_list], expected)
+                        check.reset_mock()
+                        record = 進度.load(path)["categories"][category]
+                        self.assertEqual(record["last_completed"], expected[-1])
+                        self.assertEqual(進度.next_position(record), expected[-1] % total + 1)
+                    if total > listing.PER_PAGE:
+                        navigate.assert_called_once_with(driver, 1)
 
     def test_external_page_http_status_and_browser_errors(self):
         driver = Mock()

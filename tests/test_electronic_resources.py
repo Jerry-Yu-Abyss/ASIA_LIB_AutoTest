@@ -35,6 +35,29 @@ class ElectronicResourcesTests(unittest.TestCase):
                 erm.submit_login(None, {}, "manual", False)
         form.assert_not_called()
 
+    def test_captcha_requires_four_ascii_digits_before_submission(self):
+        config = {"username": "example", "password": "example"}
+        for mode in ("manual", "tesseract"):
+            for answer in ("0123", "123", "12345", "1A23", "１２３４"):
+                with self.subTest(mode=mode, answer=answer):
+                    form, field, button = Mock(), Mock(), Mock()
+                    form.find_elements.return_value = [button]
+                    with patch.object(erm, "login_form", return_value=(form, Mock(), Mock())), \
+                         patch.object(erm, "captcha_controls", return_value=(field, Mock())), \
+                         patch.object(erm, "tesseract_command"), \
+                         patch.object(erm, "recognize_tesseract", return_value=[answer] * 3), \
+                         patch.object(erm, "WebDriverWait"):
+                        prompt = Mock(return_value=answer)
+                        if answer == "0123":
+                            erm.submit_login(Mock(), config, mode, True, prompt)
+                            field.send_keys.assert_called_once_with("0123")
+                            button.click.assert_called_once()
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "4 位半形數字"):
+                                erm.submit_login(Mock(), config, mode, True, prompt)
+                            field.send_keys.assert_not_called()
+                            button.click.assert_not_called()
+
     def test_report_and_url_use_electronic_resource_suite(self):
         suite = notify.SUITES[-1]
         self.assertEqual(suite[0], "電子資源登入")

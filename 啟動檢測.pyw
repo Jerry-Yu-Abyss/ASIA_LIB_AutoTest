@@ -168,7 +168,7 @@ class TestWindow:
         try:
             records = 進度.load()["categories"]
             self.progress_status.set("電子資源下次：" + "、".join(
-                f"{name} {records[name]['last_completed'] + 1}" for name in 進度.CATEGORIES))
+                f"{name} {進度.next_position(records[name])}" for name in 進度.CATEGORIES))
         except RuntimeError as exc:
             self.progress_status.set(str(exc))
 
@@ -193,7 +193,7 @@ class TestWindow:
             ttk.Label(body, text=name).grid(row=index, column=0, sticky="w", pady=4)
             value = tk.StringVar(value=str(current[name]["last_completed"]))
             ttk.Entry(body, textvariable=value, width=12).grid(row=index, column=1, padx=12)
-            ttk.Label(body, text=f"目前下次第 {current[name]['last_completed'] + 1} 筆").grid(
+            ttk.Label(body, text=f"目前下次第 {進度.next_position(current[name])} 筆").grid(
                 row=index, column=2, sticky="w")
             entries[name] = value
         ttk.Label(body, text="手動變更筆數會清除該分類的順序檢查點。",

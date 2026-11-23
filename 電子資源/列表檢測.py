@@ -138,11 +138,13 @@ def control_values(driver) -> bool:
         return False
 
 
-def select_controls(driver) -> None:
+def select_controls(driver) -> int:
     set_dropdown(driver, 1, SORT_VALUE, "排序")
     set_dropdown(driver, 2, str(PER_PAGE), "每頁筆數")
     choose_list_view(driver)
     total = result_total(driver)
+    if total > PER_PAGE:
+        go_to_page(driver, 1)
     try:
         WebDriverWait(driver, 20).until(
             lambda d: len(visible_resources(d)) == min(read_total(d) or total, PER_PAGE))
@@ -153,6 +155,7 @@ def select_controls(driver) -> None:
     except TimeoutException:
         raise RuntimeError("切換列表後排序或每頁顯示設定未保留")
     validate_page(driver)
+    return total
 
 
 def choose_list_view(driver) -> None:
@@ -209,6 +212,8 @@ def result_total(driver) -> int:
     try:
         return WebDriverWait(driver, 20).until(lambda current: read_total(current))
     except TimeoutException:
+        if read_total(driver) == 0:
+            raise RuntimeError("清單沒有資源可供測試") from None
         raise RuntimeError("無法讀取清單總筆數，已停止以免使用過期結果")
 
 
@@ -275,10 +280,12 @@ def page_input(driver):
 
 
 def go_to_page(driver, page: int) -> None:
-    if page == 1:
+    if page == 1 and result_total(driver) <= PER_PAGE:
+        return
+    field = page_input(driver)
+    if field.get_attribute("value") == str(page):
         return
     before = identity(visible_resources(driver)[0])[1]
-    field = page_input(driver)
     field.clear()
     field.send_keys(str(page), Keys.ENTER)
     try:
@@ -294,15 +301,21 @@ def go_to_page(driver, page: int) -> None:
     validate_page(driver)
 
 
-def prepare(driver, category: str, position: int) -> None:
-    for stage, action in (("進入分類", lambda: open_category(driver, category)),
-                          ("設定列表", lambda: select_controls(driver)),
-                          ("切換頁碼", lambda: go_to_page(driver, (position - 1) // PER_PAGE + 1))):
-        try:
-            action()
-        except Exception as exc:
-            detail = str(exc).splitlines()[0] or type(exc).__name__
-            raise RuntimeError(f"{category}{stage}失敗：{detail}") from exc
+def prepare(driver, category: str, position: int) -> int:
+    stage = "進入分類"
+    try:
+        open_category(driver, category)
+        stage = "設定列表"
+        total = select_controls(driver)
+        if position > total:
+            raise RuntimeError(f"第 {position} 筆超出目前 {total} 筆，請檢查進度")
+        if position > PER_PAGE:
+            stage = "切換頁碼"
+            go_to_page(driver, (position - 1) // PER_PAGE + 1)
+        return total
+    except Exception as exc:
+        detail = str(exc).splitlines()[0] or type(exc).__name__
+        raise RuntimeError(f"{category}{stage}失敗：{detail}") from exc
 
 
 def configured(driver, page: int) -> bool:
@@ -431,15 +444,16 @@ def connection_note(status: str, success: bool) -> str:
 def check_category(driver, category: str, data: dict, output: list[dict], path: Path) -> None:
     record = data["categories"][category]
     last = record["last_completed"]
-    start = last + 1
-    prepare(driver, category, last if last else start)
+    total = prepare(driver, category, last or 1)
+    start = last % total + 1
     if record["last_key"]:
         _, _, key = item_at(driver, last)
         if key != record["last_key"]:
             raise RuntimeError(f"{category} 第 {last} 筆內容與上次檢查點不同，未往下測試；請在 GUI 檢查進度")
     print(f"{category}：本次從第 {start} 筆開始，最多測試 {PER_RUN} 筆。", flush=True)
     current_page = (last - 1) // PER_PAGE + 1 if last else 1
-    for position in range(start, start + PER_RUN):
+    for offset in range(PER_RUN):
+        position = (last + offset) % total + 1
         page = (position - 1) // PER_PAGE + 1
         if not configured(driver, current_page):
             prepare(driver, category, position)
@@ -468,7 +482,7 @@ def check_category(driver, category: str, data: dict, output: list[dict], path: 
         if case["status"] == "未檢查":
             # 找不到連線入口或無法完成操作時保留該筆；已取得連線失敗狀態則記錄並接續。
             break
-        進度.advance(data, category, position, key, path)
+        進度.advance(data, category, position, key, path, total=total)
 
 
 def main() -> int:
@@ -502,7 +516,7 @@ def main() -> int:
                     check_category(driver, category, data, results, 進度.PROGRESS_FILE)
                 except Exception as exc:
                     reason = str(exc).splitlines()[0] or type(exc).__name__
-                    results.append({"category": category, "position": data["categories"][category]["last_completed"] + 1,
+                    results.append({"category": category, "position": 進度.next_position(data["categories"][category]),
                                     "name": "清單或進度檢查", "success": False, "reason": reason, "url": TARGET_URL})
                     print(f"[FAIL] {category}：{reason}", flush=True)
     except Exception as exc:

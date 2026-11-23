@@ -34,6 +34,9 @@ def validate(data: object) -> dict:
         if not isinstance(record, dict) or type(record.get("last_completed")) is not int or record["last_completed"] < 0:
             raise ValueError(f"{name} 的已測筆數必須是非負整數")
         key = record.get("last_key")
+        total = record.get("last_total")
+        if total is not None and (type(total) is not int or total <= 0 or record["last_completed"] > total):
+            raise ValueError(f"{name} 的清單總筆數不正確")
         if key is not None and (not isinstance(key, str) or len(key) != 64 or
                                 any(ch not in "0123456789abcdef" for ch in key)):
             raise ValueError(f"{name} 的檢查點格式不正確")
@@ -96,11 +99,17 @@ def exclusive(path: Path = LOCK_FILE):
                 fcntl.flock(file.fileno(), fcntl.LOCK_UN)
 
 
-def advance(data: dict, category: str, position: int, key: str, path: Path = PROGRESS_FILE) -> None:
+def next_position(record: dict) -> int:
+    return 1 if record["last_completed"] == record.get("last_total") else record["last_completed"] + 1
+
+
+def advance(data: dict, category: str, position: int, key: str, path: Path = PROGRESS_FILE,
+            *, total: int | None = None) -> None:
     record = data["categories"][category]
-    if position != record["last_completed"] + 1:
+    expected = 1 if record["last_completed"] == total else record["last_completed"] + 1
+    if position != expected:
         raise RuntimeError(f"{category} 進度不連續，未寫入檢查點")
-    record.update(last_completed=position, last_key=key,
+    record.update(last_completed=position, last_key=key, last_total=total,
                   updated_at=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"))
     save(data, path)
 
@@ -109,6 +118,6 @@ def set_completed(data: dict, category: str, count: int, path: Path = PROGRESS_F
     """人工指定下次起點；清除舊清單的比對檢查點。"""
     if category not in CATEGORIES or type(count) is not int or count < 0:
         raise ValueError("分類或筆數不正確")
-    data["categories"][category].update(last_completed=count, last_key=None,
+    data["categories"][category].update(last_completed=count, last_key=None, last_total=None,
                                          updated_at=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"))
     save(data, path)
