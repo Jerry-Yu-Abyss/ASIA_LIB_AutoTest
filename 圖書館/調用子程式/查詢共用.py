@@ -52,8 +52,11 @@ def print_book_indices(driver: webdriver.Chrome) -> list[int]:
     return indices
 
 
-def open_page(headless: bool = False, target_url: str = TARGET_URL) -> webdriver.Chrome:
+def open_page(headless: bool = False, target_url: str = TARGET_URL,
+              capture_network: bool = False) -> webdriver.Chrome:
     options = Options()
+    if capture_network:
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL", "browser": "ALL"})
     if headless:
         options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -67,6 +70,12 @@ def open_page(headless: bool = False, target_url: str = TARGET_URL) -> webdriver
         "Chrome/124.0.0.0 Safari/537.36"
     )
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    if capture_network:
+        try:
+            driver.execute_cdp_cmd("Network.enable", {})
+        except Exception:
+            driver.quit()
+            raise
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     print(f"[+] 正在開啟頁面：{target_url}")
     driver.set_page_load_timeout(45)
@@ -75,8 +84,10 @@ def open_page(headless: bool = False, target_url: str = TARGET_URL) -> webdriver
     except ConnectionTimeout:
         driver.quit()
         raise
-    except WebDriverException:
+    except WebDriverException as exc:
         driver.quit()
+        if capture_network:
+            raise RuntimeError("無法開啟電子資源網站，瀏覽器連線錯誤") from exc
         raise RuntimeError("無法開啟圖書館網站，請稍後再試或檢查網路") from None
     try:
         WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))

@@ -10,7 +10,8 @@ import re
 import sys
 from urllib.parse import urlsplit
 
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import (ElementClickInterceptedException, StaleElementReferenceException,
+                                        TimeoutException, WebDriverException)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select, WebDriverWait
@@ -25,12 +26,11 @@ PER_RUN = 5
 PER_PAGE = 100
 SORT_VALUE = "-mti.sort,-category"
 CONTROL_ROW = ".row.g-2.g-lg-3.align-items-center"
-INTRO_XPATH = ("//a[normalize-space()='簡介' or normalize-space()='Introduction' or @title='簡介'] | "
-               "//button[normalize-space()='簡介' or normalize-space()='Introduction' or @title='簡介']")
+RESOURCE_SELECTOR = "#content-list .link-main"
 NAV_ALIASES = {"資料庫": "Databases", "電子期刊": "E-Journals",
                "電子書": "E-Books", "網路資源": "Website"}
-ACTION_NAMES = ("簡介", "Introduction", "問題通報", "期刊指標", "收藏", "Report", "Favorite")
-ACCESS_NAMES = ("連線", "進入", "使用", "全文", "開啟", "前往", "Access", "Full Text", "Visit", "Go to")
+CATEGORY_PATHS = {"資料庫": "/er/browse/db/", "電子期刊": "/er/browse/ej/",
+                  "電子書": "/er/browse/eb/", "網路資源": "/er/browse/ir/"}
 ERROR_TITLES = ("無法連上", "無法存取", "找不到網頁", "This site can’t be reached",
                 "This site can't be reached", "Access Denied", "Forbidden", "Not Found",
                 "Service Unavailable", "Bad Gateway")
@@ -42,157 +42,225 @@ def same_site(url: str) -> bool:
 
 
 def controls(driver):
-    for row in driver.find_elements(By.CSS_SELECTOR, CONTROL_ROW):
-        selects = row.find_elements(By.TAG_NAME, "select")
-        sort = next((element for element in selects if element.find_elements(
-            By.CSS_SELECTOR, f"option[value='{SORT_VALUE}']")), None)
-        size = next((element for element in selects if element.find_elements(
-            By.CSS_SELECTOR, f"option[value='{PER_PAGE}']")), None)
-        if sort is not None and size is not None:
-            return row, sort, size
+    try:
+        for row in driver.find_elements(By.CSS_SELECTOR, CONTROL_ROW):
+            selects = row.find_elements(By.TAG_NAME, "select")
+            sort = next((element for element in selects if element.find_elements(
+                By.CSS_SELECTOR, f"option[value='{SORT_VALUE}']")), None)
+            size = next((element for element in selects if element.find_elements(
+                By.CSS_SELECTOR, f"option[value='{PER_PAGE}']")), None)
+            if sort is not None and size is not None:
+                return row, sort, size
+    except StaleElementReferenceException:
+        pass
     return None
 
 
-def open_category(driver, name: str) -> None:
-    items = driver.find_elements(By.CSS_SELECTOR, ".nav-item")
-    label = f".//a[normalize-space()='{name}' or normalize-space()='{NAV_ALIASES[name]}']"
-    nav = next((item for item in items if item.find_elements(
-        By.XPATH, label)), None)
-    if nav is None:
-        raise RuntimeError(f"導覽列找不到{name}")
-    heading = nav.find_element(By.XPATH, label)
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", heading)
-    heading.click()
+def click_fresh(driver, xpath: str, description: str) -> None:
+    """重新取得選單元素；固定選單擋住點擊時在該連結上觸發 click。"""
+    def attempt(current):
+        try:
+            links = current.find_elements(By.XPATH, xpath)
+            link = next((element for element in links if element.is_displayed()), None)
+            if link is None:
+                return False
+            current.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+            try:
+                link.click()
+            except ElementClickInterceptedException:
+                # 捲動後固定導覽列仍可能把 Selenium 的點擊座標推到畫面外。
+                link = current.find_element(By.XPATH, xpath)
+                current.execute_script("arguments[0].click();", link)
+            return True
+        except StaleElementReferenceException:
+            return False
     try:
-        WebDriverWait(driver, 8).until(lambda d: controls(d))
+        WebDriverWait(driver, 15).until(attempt)
+    except TimeoutException:
+        raise RuntimeError(f"無法點擊{description}") from None
+
+
+def category_ready(driver, name: str) -> bool:
+    """分類連結是獨立網址；先確認網址，再讀取當頁的控件。"""
+    return (urlsplit(driver.current_url).path.rstrip("/") == CATEGORY_PATHS[name].rstrip("/")
+            and bool(controls(driver)))
+
+
+def open_category(driver, name: str) -> None:
+    if category_ready(driver, name):
+        return
+    nav_item = ("//*[contains(concat(' ', normalize-space(@class), ' '), ' nav-item ') and "
+                f".//a[normalize-space()='{name}' or normalize-space()='{NAV_ALIASES[name]}']]")
+    nav = nav_item + f"//a[normalize-space()='{name}' or normalize-space()='{NAV_ALIASES[name]}']"
+    click_fresh(driver, nav, f"{name}導覽列")
+    try:
+        WebDriverWait(driver, 12).until(lambda d: category_ready(d, name))
     except TimeoutException:
         # 有些主選單先展開子選單，題名瀏覽才會進入完整清單。
-        submenu = nav.find_elements(By.XPATH,
-            ".//a[normalize-space()='題名瀏覽' or normalize-space()='瀏覽題名' or normalize-space()='Browse Title']")
-        if not submenu:
+        submenu = (nav_item + "//a[normalize-space()='題名瀏覽' or normalize-space()='瀏覽題名' "
+                   "or normalize-space()='Browse Title']")
+        if not driver.find_elements(By.XPATH, submenu):
             raise RuntimeError(f"{name} 選單沒有進入結果列表") from None
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submenu[0])
-        submenu[0].click()
-        WebDriverWait(driver, 20).until(lambda d: controls(d))
+        click_fresh(driver, submenu, f"{name}題名瀏覽")
+        try:
+            WebDriverWait(driver, 20).until(lambda d: category_ready(d, name))
+        except TimeoutException:
+            raise RuntimeError(f"{name} 清單未完成更新") from None
     if not same_site(driver.current_url):
         raise RuntimeError(f"{name} 清單跳至非預期網站")
 
 
+def set_dropdown(driver, index: int, value: str, description: str) -> None:
+    def apply(current):
+        try:
+            found = controls(current)
+            if not found:
+                return False
+            element = found[index]
+            if element.get_attribute("value") == value:
+                return True
+            Select(element).select_by_value(value)
+        except StaleElementReferenceException:
+            pass
+        return False
+    try:
+        WebDriverWait(driver, 20).until(apply)
+    except TimeoutException:
+        raise RuntimeError(f"{description}設定未成功更新") from None
+
+
+def control_values(driver) -> bool:
+    try:
+        found = controls(driver)
+        return bool(found and found[1].get_attribute("value") == SORT_VALUE
+                    and found[2].get_attribute("value") == str(PER_PAGE))
+    except StaleElementReferenceException:
+        return False
+
+
 def select_controls(driver) -> None:
-    row, sort, size = WebDriverWait(driver, 20).until(lambda d: controls(d))
-    if Select(sort).first_selected_option.get_attribute("value") != SORT_VALUE:
-        Select(sort).select_by_value(SORT_VALUE)
-        WebDriverWait(driver, 20).until(lambda d: controls(d) and controls(d)[1].get_attribute("value") == SORT_VALUE)
-    row, sort, size = WebDriverWait(driver, 20).until(lambda d: controls(d))
-    if Select(size).first_selected_option.get_attribute("value") != str(PER_PAGE):
-        Select(size).select_by_value(str(PER_PAGE))
-        WebDriverWait(driver, 20).until(lambda d: controls(d) and controls(d)[2].get_attribute("value") == str(PER_PAGE))
-    row, _, _ = WebDriverWait(driver, 20).until(lambda d: controls(d))
-    choose_list_view(driver, row)
+    set_dropdown(driver, 1, SORT_VALUE, "排序")
+    set_dropdown(driver, 2, str(PER_PAGE), "每頁筆數")
+    choose_list_view(driver)
     total = result_total(driver)
-    WebDriverWait(driver, 20).until(lambda d: len(visible_intros(d)) == min(read_total(d) or total, PER_PAGE))
-    row, sort, size = controls(driver)
-    if sort.get_attribute("value") != SORT_VALUE or size.get_attribute("value") != str(PER_PAGE):
+    try:
+        WebDriverWait(driver, 20).until(
+            lambda d: len(visible_resources(d)) == min(read_total(d) or total, PER_PAGE))
+    except TimeoutException:
+        raise RuntimeError(f"列表連線入口未更新至預期筆數（目前 {len(visible_resources(driver))} 筆）") from None
+    try:
+        WebDriverWait(driver, 20).until(control_values)
+    except TimeoutException:
         raise RuntimeError("切換列表後排序或每頁顯示設定未保留")
     validate_page(driver)
 
 
-def choose_list_view(driver, row) -> None:
+def choose_list_view(driver) -> None:
     """網站用 label[for=bookInfo-list] 切換列表，對應的 radio 表示選取狀態。"""
     selector = 'label.btn.btn-outline-accessory.btn-sm[for="bookInfo-list"]'
-    labels = [element for element in row.find_elements(By.CSS_SELECTOR, selector) if element.is_displayed()]
-    if not labels:
-        labels = [element for element in driver.find_elements(By.CSS_SELECTOR, selector) if element.is_displayed()]
-    if len(labels) != 1:
-        raise RuntimeError("找不到唯一的「列表」檢視標籤")
-    selected = driver.find_element(By.ID, "bookInfo-list")
-    if not selected.is_selected():
-        labels[0].click()
+    def attempt(current):
+        try:
+            found = controls(current)
+            if not found:
+                return False
+            labels = [element for element in found[0].find_elements(By.CSS_SELECTOR, selector)
+                      if element.is_displayed()]
+            if not labels:
+                labels = [element for element in current.find_elements(By.CSS_SELECTOR, selector)
+                          if element.is_displayed()]
+            if len(labels) != 1:
+                return False
+            if current.find_element(By.ID, "bookInfo-list").is_selected():
+                return True
+            labels[0].click()
+        except StaleElementReferenceException:
+            return False
+        return False
     try:
-        WebDriverWait(driver, 10).until(lambda d: d.find_element(By.ID, "bookInfo-list").is_selected())
+        WebDriverWait(driver, 10).until(attempt)
     except TimeoutException:
-        raise RuntimeError("列表檢視未成功啟用") from None
+        raise RuntimeError("找不到列表檢視標籤或列表檢視未成功啟用") from None
 
 
-def visible_intros(driver) -> list:
-    return [element for element in driver.find_elements(By.XPATH, INTRO_XPATH) if element.is_displayed()]
+def visible_resources(driver) -> list:
+    try:
+        return [element for element in driver.find_elements(By.CSS_SELECTOR, RESOURCE_SELECTOR)
+                if element.is_displayed()]
+    except StaleElementReferenceException:
+        return []
 
 
 def read_total(driver) -> int | None:
-    content = driver.find_element(By.TAG_NAME, "body").text
+    try:
+        counts = driver.find_elements(By.ID, "search-count")
+        if counts:
+            count = counts[0].text.strip().replace(",", "")
+            if count.isdigit():
+                return int(count)
+        content = driver.find_element(By.TAG_NAME, "body").text
+    except StaleElementReferenceException:
+        return None
     match = re.search(r"(?:查詢結果|Search Results|Results?)\s*[:：]?\s*([\d,]+)\s*(?:筆|records?)",
                       content, flags=re.IGNORECASE)
     return int(match[1].replace(",", "")) if match else None
 
 
 def result_total(driver) -> int:
-    total = read_total(driver)
-    if total is None:
+    try:
+        return WebDriverWait(driver, 20).until(lambda current: read_total(current))
+    except TimeoutException:
         raise RuntimeError("無法讀取清單總筆數，已停止以免使用過期結果")
-    return total
 
 
-def resource_row(intro):
-    """由簡介向外找同一筆結果，不假設網站使用 li/card 標籤。"""
-    node = intro
-    relative_intros = INTRO_XPATH.replace("//", ".//")
-    for _ in range(10):
-        node = node.find_element(By.XPATH, "..")
-        if len([element for element in node.find_elements(By.XPATH, relative_intros)
-                if element.is_displayed()]) != 1:
-            continue
-        headings = [element for element in node.find_elements(By.CSS_SELECTOR, "h2, h3, h4, h5, .title")
-                    if element.is_displayed() and element.text.strip()]
-        links = [element for element in node.find_elements(By.CSS_SELECTOR, "a[href]")
-                 if element.is_displayed() and element.text.strip()
-                 and not any(element.text.strip().casefold() == action.casefold() for action in ACTION_NAMES)]
-        if headings or links:
-            return node
-    raise RuntimeError("無法辨識簡介所屬的清單項目，進度未前進")
-
-
-def identity(intro) -> tuple[str, str]:
-    """標題可重複，加入連結／列表整列內容產生檢查點。"""
-    row = resource_row(intro)
-    title = next((e.text.strip() for e in row.find_elements(By.CSS_SELECTOR, "h2, h3, h4, h5, .title")
-                  if e.is_displayed() and e.text.strip()), "")
-    title = title or next((e.text.strip() for e in row.find_elements(By.CSS_SELECTOR, "a[href]")
-                           if e.is_displayed() and e.text.strip() and
-                           not any(e.text.strip().casefold() == action.casefold() for action in ACTION_NAMES)), "")
-    identifiers = [intro.get_attribute("data-id"), row.get_attribute("data-id")]
-    href = intro.get_attribute("href") or ""
-    if same_site(href):
-        identifiers.append(href)
-    if not any(identifiers):
-        for link in row.find_elements(By.CSS_SELECTOR, "a[href]"):
-            href = link.get_attribute("href") or ""
-            if same_site(href):
-                identifiers.append(href)
-                break
-    stable = next((value for value in identifiers if value), row.text.strip())
+def identity(link) -> tuple[str, str]:
+    """用每筆 .link-main 的名稱與識別資料保護下一次的接續位置。"""
+    title = (link.text.strip() or link.get_attribute("title") or link.get_attribute("aria-label") or "").strip()
+    stable = (link.get_attribute("data-id") or link.get_attribute("data-article-id")
+              or link.get_attribute("href") or "").strip()
+    if not title or not stable:
+        raise RuntimeError("資源連線入口缺少名稱或識別資料，進度未前進")
     raw = f"{title}\n{stable}"
-    if not title or not raw.strip():
-        raise RuntimeError("清單項目缺少可辨識的名稱或識別資料")
     return title, hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def item_at(driver, position: int) -> tuple[object, str, str]:
-    intros = visible_intros(driver)
     index = (position - 1) % PER_PAGE
-    if index >= len(intros):
-        raise RuntimeError(f"清單找不到第 {position} 筆（目前頁面僅 {len(intros)} 筆）")
-    item = intros[index]
-    title, key = identity(item)
-    return item, title, key
+    def locate(current):
+        try:
+            resources = visible_resources(current)
+            if index >= len(resources):
+                return False
+            item = resources[index]
+            title, key = identity(item)
+            return item, title, key
+        except StaleElementReferenceException:
+            return False
+    try:
+        return WebDriverWait(driver, 20).until(locate)
+    except TimeoutException:
+        raise RuntimeError(f"清單找不到穩定的第 {position} 筆") from None
 
 
 def validate_page(driver) -> None:
-    keys = [identity(element)[1] for element in visible_intros(driver)]
+    def read_keys(current):
+        try:
+            resources = visible_resources(current)
+            return [identity(element)[1] for element in resources] if resources else False
+        except StaleElementReferenceException:
+            return False
+    try:
+        keys = WebDriverWait(driver, 30).until(read_keys)
+    except TimeoutException:
+        raise RuntimeError("清單持續更新，無法確認項目順序") from None
     if len(set(keys)) != len(keys):
         raise RuntimeError("清單存在無法區分的重複項目，已停止以免跳筆")
 
 
 def page_input(driver):
+    footer = [element for element in driver.find_elements(
+        By.CSS_SELECTOR, "#page_footer .change-page input[type='number']") if element.is_displayed()]
+    if len(footer) == 1:
+        return footer[0]
     inputs = [e for e in driver.find_elements(By.XPATH,
         "//input[@type='number' or @type='text' or @inputmode='numeric' or contains(@aria-label,'頁數')]")
         if e.is_displayed() and (e.get_attribute("value") or "").isdigit()]
@@ -209,15 +277,15 @@ def page_input(driver):
 def go_to_page(driver, page: int) -> None:
     if page == 1:
         return
-    before = identity(visible_intros(driver)[0])[1]
+    before = identity(visible_resources(driver)[0])[1]
     field = page_input(driver)
     field.clear()
     field.send_keys(str(page), Keys.ENTER)
     try:
-        WebDriverWait(driver, 20).until(lambda d: visible_intros(d)
-            and identity(visible_intros(d)[0])[1] != before
+        WebDriverWait(driver, 20).until(lambda d: visible_resources(d)
+            and identity(visible_resources(d)[0])[1] != before
             and read_total(d) is not None
-            and len(visible_intros(d)) == min(max(read_total(d) - (page - 1) * PER_PAGE, 0), PER_PAGE))
+            and len(visible_resources(d)) == min(max(read_total(d) - (page - 1) * PER_PAGE, 0), PER_PAGE))
     except TimeoutException:
         raise RuntimeError(f"無法確認已切換到第 {page} 頁") from None
     field = page_input(driver)
@@ -227,45 +295,25 @@ def go_to_page(driver, page: int) -> None:
 
 
 def prepare(driver, category: str, position: int) -> None:
-    open_category(driver, category)
-    select_controls(driver)
-    go_to_page(driver, (position - 1) // PER_PAGE + 1)
+    for stage, action in (("進入分類", lambda: open_category(driver, category)),
+                          ("設定列表", lambda: select_controls(driver)),
+                          ("切換頁碼", lambda: go_to_page(driver, (position - 1) // PER_PAGE + 1))):
+        try:
+            action()
+        except Exception as exc:
+            detail = str(exc).splitlines()[0] or type(exc).__name__
+            raise RuntimeError(f"{category}{stage}失敗：{detail}") from exc
 
 
 def configured(driver, page: int) -> bool:
-    found = controls(driver)
-    if not found or found[1].get_attribute("value") != SORT_VALUE or found[2].get_attribute("value") != str(PER_PAGE):
+    try:
+        if not control_values(driver):
+            return False
+        if page > 1 and page_input(driver).get_attribute("value") != str(page):
+            return False
+        return bool(visible_resources(driver))
+    except StaleElementReferenceException:
         return False
-    if page > 1 and page_input(driver).get_attribute("value") != str(page):
-        return False
-    return bool(visible_intros(driver))
-
-
-def connection_link(scope, title: str, *, detail: bool = False):
-    """只選資源名稱／連線入口，避開問題通報、收藏與簡介操作。"""
-    links = [e for e in scope.find_elements(By.CSS_SELECTOR, "a[href], button") if e.is_displayed()]
-    candidates = []
-    for link in links:
-        label = " ".join((link.text, link.get_attribute("title") or "",
-                          link.get_attribute("aria-label") or "")).strip()
-        href = link.get_attribute("href") or ""
-        if any(action.casefold() in label.casefold() for action in ACTION_NAMES):
-            continue
-        if not href and link.tag_name == "a":
-            continue
-        explicit = any(word.casefold() in label.casefold() for word in ACCESS_NAMES)
-        is_title = bool(title and title.casefold() in label.casefold())
-        external = urlsplit(href).scheme in ("http", "https") and not same_site(href)
-        if explicit or external or (is_title and not detail):
-            candidates.append((3 if explicit else 2 if is_title and not detail else 1, link))
-    if not candidates:
-        return None
-    highest = max(rank for rank, _ in candidates)
-    best = [link for rank, link in candidates if rank == highest]
-    # 詳情頁若同時有多個外站網址，無法確定哪個才是資源入口。
-    if detail and len(best) != 1:
-        return None
-    return best[0]
 
 
 def opened_page(driver, origin: str, handles: set[str]) -> bool:
@@ -304,35 +352,41 @@ def connection_result(driver) -> dict:
             "connection_url": safe_url}
 
 
-def check_connection(driver, intro, title: str) -> dict:
+def check_connection(driver, link, title: str) -> dict:
+    """僅點擊當筆列表的 .link-main，檢查實際開啟的系統平台。"""
     origin = driver.current_url
     original_handle = driver.current_window_handle
     handles = set(driver.window_handles)
-    row = resource_row(intro)
-    link = connection_link(row, title)
-    if link is None:
-        raise RuntimeError("清單找不到該筆的資源連線入口；進度未前進")
+    href = link.get_attribute("href") or ""
+    target = urlsplit(href)._replace(query="", fragment="").geturl()
     try:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
-        link.click()
+        try:
+            try:
+                link.click()
+            except ElementClickInterceptedException:
+                driver.execute_script("arguments[0].click();", link)
+        except TimeoutException:
+            return {"success": False, "status": "平台連線逾時", "connection_url": target}
+        except WebDriverException as exc:
+            error = re.search(r"net::(ERR_[A-Z0-9_]+)", str(exc))
+            if error:
+                return {"success": False, "status": f"瀏覽器連線錯誤：{error[1]}",
+                        "connection_url": target}
+            raise
         try:
             opened_page(driver, origin, handles)
         except TimeoutException:
-            return {"success": False, "status": "點擊連結後未開啟頁面", "connection_url": ""}
+            return {"success": False, "status": "點擊平台連結後未開啟頁面", "connection_url": target}
         if same_site(driver.current_url):
-            main = driver.find_elements(By.TAG_NAME, "main")
-            detail = connection_link(main[0] if main else driver, title, detail=True)
-            if detail is None:
-                return {"success": False, "status": "館內詳情頁找不到資源連線入口", "connection_url": ""}
-            before = driver.current_url
-            current_handles = set(driver.window_handles)
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", detail)
-            detail.click()
             try:
-                opened_page(driver, before, current_handles)
+                WebDriverWait(driver, 8).until(lambda current: not same_site(current.current_url))
             except TimeoutException:
-                return {"success": False, "status": "連線入口未開啟頁面", "connection_url": ""}
-        return connection_result(driver)
+                pass
+        outcome = connection_result(driver)
+        if outcome["connection_url"].startswith("chrome-error://") and target:
+            outcome["connection_url"] = target
+        return outcome
     finally:
         for handle in set(driver.window_handles) - handles:
             driver.switch_to.window(handle)
@@ -341,6 +395,37 @@ def check_connection(driver, intro, title: str) -> dict:
         if driver.current_url != origin:
             driver.get(origin)
             WebDriverWait(driver, 20).until(lambda d: controls(d))
+
+
+def connection_state(status: str, success: bool) -> str:
+    if success:
+        return "可連線"
+    if status in ("HTTP 401", "HTTP 403"):
+        return "拒絕存取"
+    if status == "HTTP 404":
+        return "資源不存在"
+    if status == "HTTP 429":
+        return "請求受限"
+    match = re.fullmatch(r"HTTP (\d{3})", status)
+    if match and int(match[1]) >= 500:
+        return "平台錯誤"
+    return "連線失敗"
+
+
+def connection_note(status: str, success: bool) -> str:
+    """只說明平台連線結果。"""
+    if success:
+        return "連線成功。" if status.startswith("HTTP ") else "頁面可連線；HTTP 狀態未取得。"
+    if status in ("HTTP 401", "HTTP 403"):
+        return "平台已回應但拒絕存取；可能需要登入、授權或受到安全機制限制。"
+    if status == "HTTP 404":
+        return "平台已回應，但目的頁不存在。"
+    if status == "HTTP 429":
+        return "平台已回應但限制請求頻率；請降低檢測頻率。"
+    match = re.fullmatch(r"HTTP (\d{3})", status)
+    if match and int(match[1]) >= 500:
+        return "平台伺服器回應錯誤。"
+    return "平台未能正常開啟。"
 
 
 def check_category(driver, category: str, data: dict, output: list[dict], path: Path) -> None:
@@ -362,19 +447,23 @@ def check_category(driver, category: str, data: dict, output: list[dict], path: 
         elif page != current_page:
             go_to_page(driver, page)
             current_page = page
-        intro, title, key = item_at(driver, position)
+        link, title, key = item_at(driver, position)
         case = {"category": category, "position": position, "name": title,
-                "success": False, "reason": "", "status": "未檢查", "connection_url": "",
+                "success": False, "reason": "", "status": "未檢查", "connection_state": "未檢查",
+                "connection_note": "", "connection_url": "",
                 "url": driver.current_url}
         try:
-            outcome = check_connection(driver, intro, title)
+            outcome = check_connection(driver, link, title)
             case.update(outcome)
+            case["connection_state"] = connection_state(case["status"], case["success"])
+            case["connection_note"] = connection_note(case["status"], case["success"])
             case["reason"] = "" if case["success"] else case["status"]
         except Exception as exc:
             case["reason"] = str(exc).splitlines()[0] or "資源連線無法檢查"
+            case["connection_note"] = f"尚未完成連線檢查：{case['reason']}"
         output.append(case)
         print(f"[{'PASS' if case['success'] else 'FAIL'}] {category} 第 {position} 筆｜{title}："
-              f"{case['status'] if case['status'] != '未檢查' else case['reason']}"
+              f"狀態：{case['connection_state']}（{case['status']}）｜註解：{case['connection_note']}"
               f"｜{case['connection_url'] or '未取得目的網址'}", flush=True)
         if case["status"] == "未檢查":
             # 找不到連線入口或無法完成操作時保留該筆；已取得連線失敗狀態則記錄並接續。

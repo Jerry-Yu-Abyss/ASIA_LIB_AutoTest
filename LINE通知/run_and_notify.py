@@ -116,7 +116,10 @@ def normalize(name: str, data: object, code: int, fallback: str) -> list[dict]:
         elif name == "電子資源列表":
             label = f"{item.get('category', '')} 第 {item.get('position', '?')} 筆 {item.get('name', '')}"
             passed = bool(item.get("success"))
-            reason, books = item.get("reason") or f"連線：{item.get('status', '未取得狀態')}", []
+            note = item.get("connection_note")
+            state = item.get("connection_state") or ("可連線" if passed else "連線失敗")
+            reason, books = (f"{state}（{item.get('status', '未取得狀態')}）：{note}" if note else
+                             item.get("reason") or f"連線：{item.get('status', '未取得狀態')}"), []
         else:
             label = f"{item.get('section', '')} {item.get('name', '未知書名')}"
             reason, books, passed = item.get("reason", ""), [], bool(item.get("success"))
@@ -226,7 +229,8 @@ def detail_message(title: str, cases: list[dict]) -> str:
         position_in_suite += 1
         entry = [f"{position_in_suite}. {line_text(case['name'])}"]
         if case["reason"]:
-            entry.append(f"原因：{line_text(case['reason'])}")
+            label = "連線註解" if case["suite"] == "電子資源列表" else "原因"
+            entry.append(f"{label}：{line_text(case['reason'])}")
         if case.get("books"):
             for book in case["books"]:
                 book_name = line_text(book.get("name") or "未取得")

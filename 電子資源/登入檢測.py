@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 from pathlib import Path
 import re
@@ -81,7 +82,9 @@ def authenticated(driver) -> bool:
     )
 
 
-def submit_login(driver, config: dict, mode: str, allow_manual_fallback: bool) -> None:
+def submit_login(driver, config: dict, mode: str, allow_manual_fallback: bool,
+                 captcha_prompt: Callable | None = None) -> None:
+    captcha_prompt = captcha_prompt or prompt_captcha
     if mode == "manual" and not allow_manual_fallback:
         raise RuntimeError("無人值守模式不可使用手動驗證碼；請改用 Tesseract")
     for attempt in range(1, MAX_CAPTCHA_ATTEMPTS + 1):
@@ -95,7 +98,7 @@ def submit_login(driver, config: dict, mode: str, allow_manual_fallback: bool) -
         field, image = captcha_controls(form)
         if field is not None:
             if mode == "manual":
-                answer = prompt_captcha(image)
+                answer = captcha_prompt(image)
             else:
                 tesseract_command()
                 answers = recognize_tesseract(image.screenshot_as_png)
@@ -106,7 +109,7 @@ def submit_login(driver, config: dict, mode: str, allow_manual_fallback: bool) -
                         continue
                     if not allow_manual_fallback:
                         raise RuntimeError("驗證碼多次辨識未一致，未送出登入")
-                    answer = prompt_captcha(image, "自動辨識未成功，請手動確認驗證碼。")
+                    answer = captcha_prompt(image, "自動辨識未成功，請手動確認驗證碼。")
             if not re.fullmatch(r"[A-Za-z0-9]{3,10}", answer):
                 raise RuntimeError("驗證碼格式不正確，未送出登入")
             field.clear()

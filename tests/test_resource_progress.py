@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from selenium.common.exceptions import (ElementClickInterceptedException,
+                                        StaleElementReferenceException, WebDriverException)
 from selenium.webdriver.common.by import By
 
 from LINE通知 import run_and_notify as notify
@@ -24,11 +26,16 @@ class ResourceProgressTests(unittest.TestCase):
                 self.driver = current_driver
 
             def until(self, condition):
-                return condition(self.driver)
+                for _ in range(3):
+                    result = condition(self.driver)
+                    if result:
+                        return result
+                raise AssertionError("列表檢視沒有切換")
 
-        with patch.object(listing, "WebDriverWait", Wait):
-            listing.choose_list_view(driver, row)
-        row.find_elements.assert_called_once_with(
+        with patch.object(listing, "WebDriverWait", Wait), \
+             patch.object(listing, "controls", return_value=(row, Mock(), Mock())):
+            listing.choose_list_view(driver)
+        row.find_elements.assert_called_with(
             By.CSS_SELECTOR, 'label.btn.btn-outline-accessory.btn-sm[for="bookInfo-list"]')
         label.click.assert_called_once_with()
 
@@ -45,26 +52,74 @@ class ResourceProgressTests(unittest.TestCase):
             def until(self, condition):
                 return condition(self.driver)
 
-        with patch.object(listing, "WebDriverWait", Wait):
-            listing.choose_list_view(driver, row)
+        with patch.object(listing, "WebDriverWait", Wait), \
+             patch.object(listing, "controls", return_value=(row, Mock(), Mock())):
+            listing.choose_list_view(driver)
         label.click.assert_not_called()
+
+    def test_dropdown_relocates_element_after_page_replaces_it(self):
+        driver, old, fresh = Mock(), Mock(), Mock()
+        old.get_attribute.side_effect = StaleElementReferenceException("replaced")
+        fresh.get_attribute.return_value = listing.SORT_VALUE
+        found = [(Mock(), old, Mock()), (Mock(), fresh, Mock())]
+
+        class Wait:
+            def __init__(self, current_driver, _timeout):
+                self.driver = current_driver
+
+            def until(self, condition):
+                for _ in range(3):
+                    result = condition(self.driver)
+                    if result:
+                        return result
+                raise AssertionError("設定值沒有恢復")
+
+        with patch.object(listing, "WebDriverWait", Wait), \
+             patch.object(listing, "controls", side_effect=found) as locate:
+            listing.set_dropdown(driver, 1, listing.SORT_VALUE, "排序")
+        self.assertEqual(locate.call_count, 2)
+
+    def test_navigation_uses_fresh_link_when_click_intercepted(self):
+        driver, old, fresh = Mock(), Mock(), Mock()
+        old.is_displayed.return_value = True
+        old.click.side_effect = ElementClickInterceptedException("offscreen")
+        driver.find_elements.return_value = [old]
+        driver.find_element.return_value = fresh
+
+        class Wait:
+            def __init__(self, current_driver, _timeout):
+                self.driver = current_driver
+
+            def until(self, condition):
+                return condition(self.driver)
+
+        with patch.object(listing, "WebDriverWait", Wait):
+            listing.click_fresh(driver, "//a[@id='nav']", "分類")
+        driver.execute_script.assert_any_call("arguments[0].click();", fresh)
+
+    def test_old_category_controls_do_not_count_as_new_list(self):
+        driver = Mock(current_url="https://erm.asia.edu.tw/er/browse/db/")
+        with patch.object(listing, "controls", return_value=(Mock(), Mock(), Mock())):
+            self.assertFalse(listing.category_ready(driver, "電子期刊"))
+            self.assertTrue(listing.category_ready(driver, "資料庫"))
 
     def test_result_count_parses_both_site_languages(self):
         driver = Mock()
+        driver.find_elements.return_value = []
         driver.find_element.return_value.text = "查詢結果: 57,159 筆資料"
         self.assertEqual(listing.result_total(driver), 57159)
         driver.find_element.return_value.text = "Search Results: 20 records"
         self.assertEqual(listing.result_total(driver), 20)
+        driver.find_elements.return_value = [Mock(text="56,000")]
+        self.assertEqual(listing.result_total(driver), 56000)
 
-    def test_resource_row_accepts_plain_div_without_card_or_list_item(self):
-        intro, row, title = Mock(), Mock(), Mock()
-        intro.find_element.return_value = row
-        intro.is_displayed.return_value = True
-        title.is_displayed.return_value = True
-        title.text = "資料庫名稱"
-        row.find_elements.side_effect = lambda by, selector: (
-            [intro] if by == By.XPATH else [title] if selector == "h2, h3, h4, h5, .title" else [])
-        self.assertIs(listing.resource_row(intro), row)
+    def test_visible_resources_use_only_list_main_links(self):
+        driver, visible, hidden = Mock(), Mock(), Mock()
+        driver.find_elements.return_value = [visible, hidden]
+        visible.is_displayed.return_value = True
+        hidden.is_displayed.return_value = False
+        self.assertEqual(listing.visible_resources(driver), [visible])
+        driver.find_elements.assert_called_once_with(By.CSS_SELECTOR, "#content-list .link-main")
 
     def test_sixty_resumes_at_sixty_one_and_persists_each_item(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -122,6 +177,10 @@ class ResourceProgressTests(unittest.TestCase):
                                        "資料庫", data, output, path)
             self.assertEqual([case["position"] for case in output], [1, 2, 3, 4, 5])
             self.assertEqual(output[0]["reason"], "HTTP 404")
+            self.assertEqual(output[0]["connection_state"], "資源不存在")
+            self.assertIn("目的頁不存在", output[0]["connection_note"])
+            self.assertEqual(output[1]["connection_state"], "可連線")
+            self.assertEqual(output[1]["connection_note"], "連線成功。")
             self.assertEqual(進度.load(path)["categories"]["資料庫"]["last_completed"], 5)
 
     def test_page_boundary_after_one_hundred_requests_page_two(self):
@@ -166,40 +225,65 @@ class ResourceProgressTests(unittest.TestCase):
         driver.current_url = "chrome-error://chromewebdata/"
         self.assertEqual(listing.connection_result(driver)["status"], "瀏覽器連線錯誤")
 
-    def test_connection_link_prefers_resource_title_over_unrelated_external_link(self):
-        scope = Mock()
-        report, external, title = Mock(), Mock(), Mock()
-        scope.find_elements.return_value = [report, external, title]
-        for link in (report, external, title):
-            link.is_displayed.return_value = True
-            link.tag_name = "a"
-            link.get_attribute.side_effect = lambda attribute: "" if attribute != "href" else "https://publisher.example/"
-        report.text = "問題通報"
-        external.text = "出版社"
-        title.text = "資料庫名稱"
-        self.assertIs(listing.connection_link(scope, "資料庫名稱"), title)
+    def test_http_200_note_is_connection_only(self):
+        self.assertEqual(listing.connection_note("HTTP 200", True), "連線成功。")
+        self.assertNotIn("HTTP 200", listing.connection_note("HTTP 200", True))
+        self.assertIn("拒絕存取", listing.connection_note("HTTP 403", False))
+        self.assertIn("伺服器回應錯誤", listing.connection_note("HTTP 503", False))
+        self.assertIn("HTTP 狀態未取得", listing.connection_note("頁面已載入（HTTP 狀態不可得）", True))
+        self.assertEqual(listing.connection_state("HTTP 403", False), "拒絕存取")
+        self.assertEqual(listing.connection_state("HTTP 404", False), "資源不存在")
+        self.assertEqual(listing.connection_state("HTTP 429", False), "請求受限")
+        self.assertIn("降低檢測頻率", listing.connection_note("HTTP 429", False))
 
-    def test_detail_page_with_multiple_unlabelled_external_links_is_ambiguous(self):
-        scope = Mock()
-        links = [Mock(text="Publisher"), Mock(text="Support")]
-        scope.find_elements.return_value = links
-        for link in links:
-            link.is_displayed.return_value = True
-            link.tag_name = "a"
-            link.get_attribute.side_effect = lambda attribute: "" if attribute != "href" else "https://vendor.example/"
-        self.assertIsNone(listing.connection_link(scope, "條目名稱", detail=True))
+    def test_connection_clicks_only_the_selected_link_main(self):
+        driver = Mock(current_url="https://erm.asia.edu.tw/er/browse/db/",
+                      current_window_handle="main", window_handles=["main"])
+        link = Mock()
+        link.get_attribute.return_value = "https://platform.example/resource"
+        outcome = {"success": True, "status": "HTTP 200", "connection_url": "https://platform.example/resource"}
+        with patch.object(listing, "opened_page"), patch.object(listing, "connection_result", return_value=outcome):
+            self.assertEqual(listing.check_connection(driver, link, "資料庫名稱"), outcome)
+        link.click.assert_called_once_with()
+        driver.find_elements.assert_not_called()
+
+    def test_browser_network_error_is_recorded_for_this_resource(self):
+        driver = Mock(current_url="https://erm.asia.edu.tw/er/browse/db/",
+                      current_window_handle="main", window_handles=["main"])
+        link = Mock()
+        link.get_attribute.return_value = "https://platform.example/resource?token=private"
+        link.click.side_effect = WebDriverException("net::ERR_CONNECTION_REFUSED")
+        result = listing.check_connection(driver, link, "資料庫名稱")
+        self.assertEqual(result["status"], "瀏覽器連線錯誤：ERR_CONNECTION_REFUSED")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["connection_url"], "https://platform.example/resource")
+
+    def test_identity_uses_link_main_name_and_stable_target(self):
+        link = Mock(text="資料庫名稱")
+        link.get_attribute.side_effect = lambda key: "https://platform.example/item" if key == "href" else ""
+        title, key = listing.identity(link)
+        self.assertEqual(title, "資料庫名稱")
+        self.assertEqual(len(key), 64)
+        link.text = ""
+        with self.assertRaisesRegex(RuntimeError, "缺少名稱"):
+            listing.identity(link)
 
     def test_list_results_are_individual_line_cases(self):
         fallback = notify.SUITES[-2][2]
         cases = notify.normalize("電子資源列表", [
             {"category": "資料庫", "position": 61, "name": "A", "success": True,
-             "reason": "", "url": fallback},
+              "reason": "", "status": "HTTP 200", "connection_state": "可連線",
+              "connection_note": "連線成功。",
+              "url": fallback},
             {"category": "資料庫", "position": 62, "name": "B", "success": False,
-             "reason": "簡介未載入", "url": fallback},
+              "reason": "HTTP 404", "status": "HTTP 404", "connection_state": "資源不存在",
+              "connection_note": "平台已回應，但目的頁不存在。",
+              "url": fallback},
         ], 1, fallback)
         self.assertEqual([item["passed"] for item in cases], [True, False])
         self.assertIn("第 61 筆", cases[0]["name"])
-        self.assertIn("簡介未載入", notify.detail_message("失敗", cases[1:]))
+        self.assertIn("連線註解：可連線（HTTP 200）：連線成功", notify.detail_message("通過", cases[:1]))
+        self.assertIn("連線註解：資源不存在（HTTP 404）：平台已回應，但目的頁不存在", notify.detail_message("失敗", cases[1:]))
 
 
 if __name__ == "__main__":
