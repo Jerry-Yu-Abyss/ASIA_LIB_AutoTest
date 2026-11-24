@@ -466,7 +466,7 @@ class LineRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "三次辨識未能"):
                 login(None, "https://aulib.asia.edu.tw/webpac/recommend.cfm", {}, "tesseract", False)
 
-    def test_tesseract_retries_when_site_does_not_confirm_login(self):
+    def test_tesseract_verifies_target_without_resubmitting_when_first_indicator_is_missing(self):
         from unittest.mock import Mock
 
         class Image:
@@ -480,12 +480,12 @@ class LineRunnerTests(unittest.TestCase):
              patch.object(login_module, "recognize_tesseract", return_value=["Y3F8"] * 3), \
              patch.object(login_module, "WebDriverWait") as wait, \
              patch.object(login_module, "get_with_retries"), redirect_stdout(StringIO()):
-            wait.return_value.until.side_effect = [TimeoutException(), True, True]
+            wait.return_value.until.side_effect = [TimeoutException(), True]
             login(driver, "https://aulib.asia.edu.tw/webpac/recommend.cfm", {}, "tesseract", False,
                   diagnostic=lambda event, image: events.append(event))
-        self.assertEqual(open_form.call_count, 2)
-        self.assertEqual([event["stage"] for event in events].count("submitted"), 2)
-        self.assertIn("login_error", [event["stage"] for event in events])
+        open_form.assert_called_once()
+        self.assertEqual([event["stage"] for event in events].count("submitted"), 1)
+        self.assertEqual(events[-1]["stage"], "accepted")
 
     def test_captcha_waits_for_nonzero_loaded_image(self):
         class Image:

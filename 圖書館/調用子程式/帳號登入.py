@@ -11,17 +11,18 @@ from pathlib import Path
 import re
 from urllib.parse import urlparse
 
-from selenium.common.exceptions import NoAlertPresentException, StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import (NoAlertPresentException, StaleElementReferenceException,
+                                        TimeoutException, UnexpectedAlertPresentException)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 if __package__:
     from .本機驗證碼 import recognize_tesseract, tesseract_command
-    from .網頁載入 import get_with_retries
+    from .網頁載入 import ConnectionTimeout, get_with_retries
 else:
     from 本機驗證碼 import recognize_tesseract, tesseract_command
-    from 網頁載入 import get_with_retries
+    from 網頁載入 import ConnectionTimeout, get_with_retries
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "config" / "測試帳號.local.json"
@@ -169,42 +170,55 @@ def login(driver, target_url: str, config: dict, mode: str = "manual", allow_man
             if diagnostic:
                 diagnostic({"attempt": attempt, "stage": "invalid_answer", "answer": answer}, None)
             raise RuntimeError("驗證碼格式不正確，未送出登入")
-        if diagnostic:
-            diagnostic({"attempt": attempt, "stage": "submitted", "answer": answer,
-                        "source": answer_source}, None)
         driver.find_element(By.ID, "validateCode").send_keys(answer)
-        driver.find_element(By.CSS_SELECTOR, "a[onclick*='submitForm']").click()
+        logout_link = EC.visibility_of_element_located((By.LINK_TEXT, "登出"))
+        alert_text = ""
         try:
+            driver.find_element(By.CSS_SELECTOR, "a[onclick*='submitForm']").click()
+            if diagnostic:
+                diagnostic({"attempt": attempt, "stage": "submitted", "answer": answer,
+                            "source": answer_source}, None)
             driver.switch_to.default_content()
             # 網站可能保留登入 iframe，不能用密碼欄位是否消失判斷登入成功。
-            WebDriverWait(driver, 30).until(EC.visibility_of_element_located((By.LINK_TEXT, "登出")))
-            get_with_retries(driver, target_url)
-            WebDriverWait(driver, 15).until(EC.visibility_of_element_located((By.LINK_TEXT, "登出")))
-        except Exception:
+            WebDriverWait(driver, 30).until(logout_link)
+        except (TimeoutException, UnexpectedAlertPresentException) as exc:
+            # WebDriver 可能已關閉提示框，但例外仍保有網站訊息。
+            alert_text = getattr(exc, "alert_text", "") or ""
             try:
                 alert = driver.switch_to.alert
-                alert_text = alert.text
+                alert_text = alert.text or alert_text
                 alert.accept()
             except NoAlertPresentException:
-                alert_text = ""
-            if "驗證碼" in alert_text:
-                if diagnostic:
-                    diagnostic({"attempt": attempt, "stage": "rejected", "reason": "網站判定驗證碼錯誤"}, None)
-                if mode == "tesseract" and attempt < MAX_CAPTCHA_ATTEMPTS:
-                    print("網站判定驗證碼錯誤；正在更換驗證碼重新登入。", flush=True)
-                    image = open_login_form(driver, target_url, config)
-                    continue
-                raise RuntimeError(f"網站判定驗證碼錯誤；已達 {attempt} 次上限") from None
+                pass
+        if alert_text:
+            if any(word in alert_text for word in ("帳號", "密碼", "停用", "鎖定")):
+                stage, reason = "account_rejected", "網站提示帳號、密碼或帳號狀態異常"
+            elif "驗證碼" in alert_text:
+                stage, reason = "rejected", "網站判定驗證碼錯誤"
+            else:
+                stage, reason = "login_error", "網站顯示登入提示，未確認成功"
             if diagnostic:
-                diagnostic({"attempt": attempt, "stage": "login_error",
-                            "reason": alert_text[:120] or "未確認登入成功"}, None)
-            if mode == "tesseract" and attempt < MAX_CAPTCHA_ATTEMPTS and not any(
-                word in alert_text for word in ("帳號", "密碼", "停用", "鎖定")
-            ):
-                print("網站未確認登入成功；正在更換驗證碼重新登入。", flush=True)
+                diagnostic({"attempt": attempt, "stage": stage, "reason": reason}, None)
+            if stage == "rejected" and mode == "tesseract" and attempt < MAX_CAPTCHA_ATTEMPTS:
+                print("網站判定驗證碼錯誤；正在更換驗證碼重新登入。", flush=True)
                 image = open_login_form(driver, target_url, config)
                 continue
-            raise RuntimeError("登入未成功，請確認帳密及網站狀態") from None
+            raise RuntimeError(reason)
+
+        try:
+            get_with_retries(driver, target_url)
+        except ConnectionTimeout as exc:
+            reason = "登入送出後目標頁連線逾時"
+            if diagnostic:
+                diagnostic({"attempt": attempt, "stage": "target_unavailable", "reason": reason}, None)
+            raise RuntimeError(reason) from exc
+        try:
+            WebDriverWait(driver, 15).until(logout_link)
+        except TimeoutException as exc:
+            reason = "目標頁未顯示登出，無法確認登入狀態"
+            if diagnostic:
+                diagnostic({"attempt": attempt, "stage": "session_unconfirmed", "reason": reason}, None)
+            raise RuntimeError(reason) from exc
         if diagnostic:
             diagnostic({"attempt": attempt, "stage": "accepted"}, None)
         print("[PASS] 測試帳號已登入", flush=True)
